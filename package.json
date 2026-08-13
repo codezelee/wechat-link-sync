@@ -1,0 +1,39 @@
+{
+  "name": "obsidian-wechat-link-sync",
+  "version": "1.6.0",
+  "description": "Obsidian client for the 同步链接 WeChat Mini Program.",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node esbuild.config.mjs --watch",
+    "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs --production",
+    "lint": "eslint .",
+    "verify": "npm run lint && npm run build"
+  },
+  "keywords": [
+    "obsidian",
+    "wechat",
+    "article",
+    "markdown",
+    "web-clipper"
+  ],
+  "author": "codezelee",
+  "license": "MIT",
+  "dependencies": {
+    "defuddle": "^0.19.2",
+    "turndown": "^7.2.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@types/node": "^22.15.17",
+    "@types/turndown": "^5.0.5",
+    "esbuild": "0.25.5",
+    "eslint": "^9.39.4",
+    "eslint-plugin-obsidianmd": "^0.4.0",
+    "globals": "^17.6.0",
+    "jiti": "^2.6.1",
+    "obsidian": "latest",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.59.1"
+  }
+}
