@@ -6,6 +6,13 @@
  */
 export const PROTOCOL_VERSION = 2 as const;
 
+export const WS_CLOSE = {
+  authFailed: 4403,
+  deviceRevoked: 4407,
+  connectionReplaced: 4409,
+  rateLimited: 4429
+} as const;
+
 export type CaptureStatus = "pending" | "processing" | "processed" | "failed" | "ignored" | "trashed";
 export type RestorableCaptureStatus = Exclude<CaptureStatus, "processing" | "trashed">;
 export type DevicePlatform = "windows" | "macos";

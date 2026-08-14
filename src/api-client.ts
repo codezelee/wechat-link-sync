@@ -37,7 +37,9 @@ export class ApiClient {
     });
   }
 
-  async unbind(): Promise<void> { await this.request("/api/v1/plugin/devices/current", { method: "DELETE" }); }
+  async unbind(token?: string): Promise<void> {
+    await this.request("/api/v1/plugin/devices/current", { method: "DELETE", ...(token ? { token } : {}) });
+  }
   async renameCurrentDevice(name: string): Promise<void> { await this.request("/api/v1/plugin/devices/current", { method: "PATCH", body: { name } }); }
   async counts(): Promise<CaptureCounts> { return this.request("/api/v1/plugin/captures/counts"); }
 
@@ -108,12 +110,15 @@ export class ApiClient {
     return this.request("/api/v1/plugin/captures", { method: "DELETE" });
   }
 
-  private async request<T>(path: string, options: { method?: string; body?: unknown; auth?: boolean } = {}): Promise<T> {
+  private async request<T>(
+    path: string,
+    options: { method?: string; body?: unknown; auth?: boolean; token?: string } = {}
+  ): Promise<T> {
     const settings = this.settings();
     const parameters: RequestUrlParam = buildJsonRequest(`${settings.serverUrl.replace(/\/$/, "")}${path}`, {
       ...(options.method === undefined ? {} : { method: options.method }),
       ...(options.body === undefined ? {} : { body: options.body }),
-      ...(options.auth === false ? {} : { authorization: `Bearer ${settings.deviceToken}` })
+      ...(options.auth === false ? {} : { authorization: `Bearer ${options.token ?? settings.deviceToken}` })
     });
     const response = await requestUrl(parameters);
     const payload = response.json as { code?: string; message?: string } | undefined;

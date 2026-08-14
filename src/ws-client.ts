@@ -1,5 +1,6 @@
 import {
   PROTOCOL_VERSION,
+  WS_CLOSE,
   type CaptureChange,
   type CaptureCounts,
   type CaptureRemoval,
@@ -43,9 +44,14 @@ export class RealtimeClient {
     socket.addEventListener("close", (event) => {
       if (this.socket !== socket) return;
       this.socket = undefined;
-      if (event.code === 4403 || event.code === 4407) this.onStatus("unbound");
+      if (event.code === WS_CLOSE.authFailed || event.code === WS_CLOSE.deviceRevoked) this.onStatus("unbound");
       else this.onStatus("disconnected");
-      if (!this.manuallyClosed && event.code !== 4403 && event.code !== 4407) this.scheduleReconnect();
+      if (!this.manuallyClosed && event.code !== WS_CLOSE.authFailed && event.code !== WS_CLOSE.deviceRevoked) {
+        const minimum = event.code === WS_CLOSE.rateLimited
+          ? 30_000
+          : event.code === WS_CLOSE.connectionReplaced ? 5_000 : 0;
+        this.scheduleReconnect(minimum);
+      }
     });
     socket.addEventListener("error", () => socket.close());
   }
@@ -74,11 +80,11 @@ export class RealtimeClient {
     } catch { /* Ignore invalid or future events; REST remains authoritative. */ }
   }
 
-  private scheduleReconnect(): void {
+  private scheduleReconnect(minimumDelay = 0): void {
     const delays = [1, 2, 5, 10, 30, 60];
     const base = delays[Math.min(this.attempt++, delays.length - 1)]! * 1000;
     const jitter = Math.floor(Math.random() * Math.min(1000, base * 0.2));
-    this.reconnectTimer = window.setTimeout(() => this.connect(), base + jitter);
+    this.reconnectTimer = window.setTimeout(() => this.connect(), Math.max(minimumDelay, base + jitter));
   }
 
   private clearTimer(): void {

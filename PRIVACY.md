@@ -29,7 +29,7 @@ WeChat Link Sync 是由 Obsidian 桌面插件、微信小程序“同步链接�
 
 ### 凭据
 
-绑定后获得的设备令牌存放在 Obsidian 的本地插件数据中，用于访问当前用户的链接队列。请勿分享插件数据目录或设备令牌。解除绑定后，该令牌会失效。
+绑定后获得的设备令牌通过 Obsidian `SecretStorage` 保存，用于访问当前用户的链接队列。普通插件设置不保存明文令牌，设置界面只显示星号。解除绑定时，服务器会撤销该设备令牌，并清理本地安全存储中的令牌。
 
 ## English
 
@@ -39,4 +39,4 @@ The service processes URLs explicitly submitted by the user, optional notes and 
 
 Full extracted article bodies, Markdown notes, downloaded images, and other vault contents remain on the user's computer. When processing an article, the plugin contacts the source website directly, and that website receives the normal information associated with a web request under its own privacy policy.
 
-Local-only processing does not add the URL to the WeChat Link Sync service queue. The device token is stored in Obsidian's local plugin data and becomes invalid after unbinding.
+Local-only processing does not add the URL to the WeChat Link Sync service queue. The device token is stored through Obsidian `SecretStorage`, is not persisted in plain text plugin settings, is masked in the settings UI, and becomes invalid on the server after unbinding.
