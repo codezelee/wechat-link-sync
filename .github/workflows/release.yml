@@ -59,6 +59,15 @@ jobs:
             exit 1
           fi
 
+      - name: Package installable plugin
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="wechat-link-sync-${RELEASE_VERSION}.zip"
+          zip -q -j "${package}" main.js manifest.json styles.css
+          test -s "${package}"
+          test "$(unzip -Z1 "${package}" | sort | tr '\n' ' ')" = "main.js manifest.json styles.css "
+
       - name: Attest build provenance
         uses: actions/attest@v4
         with:
@@ -66,14 +75,17 @@ jobs:
             main.js
             manifest.json
             styles.css
+            wechat-link-sync-${{ env.RELEASE_VERSION }}.zip
 
       - name: Publish GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          package="wechat-link-sync-${RELEASE_VERSION}.zip"
           if gh release view "${RELEASE_VERSION}" >/dev/null 2>&1; then
-            echo "Release ${RELEASE_VERSION} already exists; nothing to publish."
+            gh release upload "${RELEASE_VERSION}" "${package}" --clobber
+            echo "Uploaded installable plugin package to existing release ${RELEASE_VERSION}."
             exit 0
           fi
           if ! git rev-parse "refs/tags/${RELEASE_VERSION}" >/dev/null 2>&1; then
@@ -84,4 +96,4 @@ jobs:
             --target "${GITHUB_SHA}" \
             --title "WeChat Link Sync ${RELEASE_VERSION}" \
             --notes-file CHANGELOG.md \
-            main.js manifest.json styles.css
+            "${package}" main.js manifest.json styles.css
