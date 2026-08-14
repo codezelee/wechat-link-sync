@@ -18,7 +18,9 @@ export class ArticleInboxSettingTab extends PluginSettingTab {
       .addButton((button) => button.setButtonText("测试").onClick(async () => {
         button.setDisabled(true); try { const result = await this.plugin.testConnection(); new Notice(`连接正常 · 协议 v${result.protocolVersion}`); } catch (error) { new Notice(messageOf(error)); } finally { button.setDisabled(false); }
       }));
-    new Setting(containerEl).setName("绑定状态").setDesc(settings.deviceToken ? `已绑定 · ${settings.boundAccount || "当前账号"}` : "未绑定");
+    new Setting(containerEl).setName("绑定状态").setDesc(
+      settings.deviceToken ? `已绑定 · ******** · ${settings.boundAccount || "当前账号"}` : "未绑定"
+    );
     if (!settings.deviceToken) {
       let bindingCode = "";
       new Setting(containerEl).setName("一次性绑定码").setDesc("在小程序“设备”页生成，6 位数字，10 分钟有效。")

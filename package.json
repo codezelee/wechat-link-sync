@@ -1,6 +1,6 @@
 {
   "name": "obsidian-wechat-link-sync",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Obsidian client for the 同步链接 WeChat Mini Program.",
   "main": "main.js",
   "type": "module",
@@ -8,7 +8,8 @@
     "dev": "node esbuild.config.mjs --watch",
     "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs --production",
     "lint": "eslint .",
-    "verify": "npm run lint && npm run build"
+    "verify:security": "node scripts/verify-security.mjs",
+    "verify": "npm run lint && npm run verify:security && npm run build"
   },
   "keywords": [
     "obsidian",

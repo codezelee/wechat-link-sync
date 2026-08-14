@@ -2,7 +2,7 @@ import type { CaptureCounts, CaptureLease, CaptureStatus, CaptureSummary } from 
 
 declare const __WECHAT_LINK_SYNC_DEFAULT_SERVER_URL__: string;
 
-export const PLUGIN_VERSION = "1.6.0";
+export const PLUGIN_VERSION = "1.7.0";
 export type UpdateRange = "all" | "3" | "7";
 export type NoteLocation = "callout" | "frontmatter";
 export type InboxTab = CaptureStatus;
@@ -57,7 +57,9 @@ export interface CaptureListCacheRecord {
 
 export interface ArticleInboxSettings {
   serverUrl: string;
+  /** Runtime only. saveSettings() must never persist this value. */
   deviceToken: string;
+  deviceTokenSecretId: string;
   deviceId: string;
   deviceName: string;
   boundAccount: string;
@@ -84,6 +86,7 @@ export const DEFAULT_SETTINGS: ArticleInboxSettings = {
     ? "https://api.bigpro.cn"
     : __WECHAT_LINK_SYNC_DEFAULT_SERVER_URL__,
   deviceToken: "",
+  deviceTokenSecretId: "wechat-link-sync-device-token",
   deviceId: "",
   deviceName: "Obsidian Desktop",
   boundAccount: "",

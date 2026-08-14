@@ -8,6 +8,7 @@ export default defineConfig(
     "release",
     "main.js",
     "esbuild.config.mjs",
+    "scripts",
     "docs",
     "assets",
     "package.json",

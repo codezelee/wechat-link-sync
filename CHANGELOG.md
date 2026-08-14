@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7.0
+
+- Store the bound device token with Obsidian `SecretStorage` instead of plain-text plugin settings.
+- Mask the token in settings and require unbinding before another token can be used.
+- Revoke the device token on the server when unbinding, including safe cleanup after partial binding failures.
+- Respect WebSocket replacement and rate-limit close codes with controlled reconnect delays.
+- Raise the minimum supported Obsidian version to 1.11.4 for `SecretStorage` support.
+- Keep the private and public plugin versions synchronized from this release onward.
+
 ## 1.6.0
 
 - Initial public release of **WeChat Link Sync**.

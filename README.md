@@ -88,7 +88,7 @@ WeChat Link Sync is an Obsidian desktop plugin that receives article links from 
 - 小程序投递的原始链接、备注、标签和处理状态会通过 WeChat Link Sync 服务在已绑定设备间同步。
 - 插件会连接 `https://api.bigpro.cn` 完成设备绑定、获取链接队列和回传处理状态。
 - 文章正文由 Obsidian 桌面插件从来源网站获取、解析并写入本地 Vault；插件不会把提取后的文章正文上传到 WeChat Link Sync 服务。
-- 插件保存的设备令牌位于本地 Obsidian 插件数据中。诊断导出不会包含令牌、正文或 Vault 内容。
+- 插件使用 Obsidian `SecretStorage` 保存设备令牌；普通插件设置中不会写入明文令牌，设置页也只显示星号。解除绑定后，服务器会立即使该令牌失效。诊断导出不会包含令牌、正文或 Vault 内容。
 - “本地处理链接”功能直接访问来源网页并写入当前 Vault，不创建服务器投递记录。
 
 详见 [PRIVACY.md](PRIVACY.md)。
@@ -132,7 +132,7 @@ The screenshots in the [Chinese walkthrough](#使用方法) show the complete co
 
 ### Data and repository scope
 
-The service synchronizes submitted URLs, optional notes and tags, device information, and processing status. Article content is fetched and converted by the desktop plugin and written to the local vault; extracted article bodies are not uploaded to the WeChat Link Sync service. See [PRIVACY.md](PRIVACY.md) for details.
+The service synchronizes submitted URLs, optional notes and tags, device information, and processing status. Article content is fetched and converted by the desktop plugin and written to the local vault; extracted article bodies are not uploaded to the WeChat Link Sync service. Device tokens are stored through Obsidian `SecretStorage`, are masked in settings, and are revoked by the server when the device is unbound. See [PRIVACY.md](PRIVACY.md) for details.
 
 This public repository contains only the Obsidian plugin, the minimum client protocol types required to build it, and its documentation. The WeChat Mini Program, backend implementation, database schema, and deployment configuration are not included.
 

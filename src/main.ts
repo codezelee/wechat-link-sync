@@ -76,10 +76,13 @@ export default class ArticleInboxPlugin extends Plugin {
   private lastListFetchedAt = new Map<string, number>();
   private deferredInboxRefresh = false;
   private localLinkProcessing = false;
+  private preserveLegacyDeviceToken = false;
 
   async onload(): Promise<void> {
     const saved = await this.loadData() as (Partial<ArticleInboxSettings> & Record<string, unknown>) | null;
     const current = { ...(saved ?? {}) };
+    const legacyDeviceToken = typeof current.deviceToken === "string" ? current.deviceToken.trim() : "";
+    delete current.deviceToken;
     const hasRetiredProcessedHistory = [
       "processedHistoryClearedAt",
       "processedHistoryBaselineCount",
@@ -94,6 +97,24 @@ export default class ArticleInboxPlugin extends Plugin {
     delete current.processedHistoryBaselineCount;
     delete current.dismissedProcessedCaptureIds;
     this.settings = { ...DEFAULT_SETTINGS, ...current };
+    this.settings.deviceToken = "";
+    let secretMigrationCompleted = false;
+    try {
+      if (legacyDeviceToken) {
+        this.app.secretStorage.setSecret(this.settings.deviceTokenSecretId, legacyDeviceToken);
+        if (this.app.secretStorage.getSecret(this.settings.deviceTokenSecretId) !== legacyDeviceToken) {
+          throw new Error("设备令牌安全存储校验失败");
+        }
+        this.settings.deviceToken = legacyDeviceToken;
+        secretMigrationCompleted = true;
+      } else {
+        this.settings.deviceToken = this.app.secretStorage.getSecret(this.settings.deviceTokenSecretId) ?? "";
+      }
+    } catch (error) {
+      this.settings.deviceToken = legacyDeviceToken;
+      this.preserveLegacyDeviceToken = Boolean(legacyDeviceToken);
+      new Notice(`设备令牌迁移失败：${messageOf(error)}`);
+    }
     if (typeof this.settings.articleDirectory !== "string" || !this.settings.articleDirectory.trim()) {
       this.settings.articleDirectory = DEFAULT_SETTINGS.articleDirectory;
     }
@@ -106,6 +127,7 @@ export default class ArticleInboxPlugin extends Plugin {
     }
     this.restoreCachedList("pending");
     if (hasRetiredProcessedHistory) await this.saveSettings();
+    else if (secretMigrationCompleted) await this.saveSettings();
     this.api = new ApiClient(() => this.settings);
     this.writer = new VaultWriter(this.app);
     this.realtime = new RealtimeClient(
@@ -155,6 +177,7 @@ export default class ArticleInboxPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     const persisted: Partial<ArticleInboxSettings> = { ...this.settings };
+    if (!this.preserveLegacyDeviceToken) delete persisted.deviceToken;
     if (!this.settings.ignoredCaptures.length) delete persisted.ignoredCaptures;
     await this.saveData(persisted);
   }
@@ -527,6 +550,17 @@ export default class ArticleInboxPlugin extends Plugin {
   async bind(code: string): Promise<void> {
     await this.testConnection();
     const result = await this.api.bind(code, this.settings.deviceName, currentPlatform());
+    try {
+      this.app.secretStorage.setSecret(this.settings.deviceTokenSecretId, result.deviceToken);
+      if (this.app.secretStorage.getSecret(this.settings.deviceTokenSecretId) !== result.deviceToken) {
+        throw new Error("设备令牌安全存储校验失败");
+      }
+    } catch (error) {
+      try { await this.api.unbind(result.deviceToken); }
+      catch (revokeError) { this.remember(revokeError); }
+      throw new Error(`绑定未完成：${messageOf(error)}`);
+    }
+    this.preserveLegacyDeviceToken = false;
     this.settings.deviceToken = result.deviceToken;
     this.settings.deviceId = result.device.id;
     this.settings.boundAccount = `${result.device.userId.slice(0, 4)}••••${result.device.userId.slice(-4)}`;
@@ -541,8 +575,14 @@ export default class ArticleInboxPlugin extends Plugin {
   }
 
   async unbind(): Promise<void> {
-    await this.api.unbind();
+    try { await this.api.unbind(); }
+    catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 401) throw error;
+    }
     this.realtime.disconnect();
+    try { this.app.secretStorage.setSecret(this.settings.deviceTokenSecretId, ""); }
+    catch (error) { this.remember(error); new Notice("服务器已解绑，但本地安全存储清理失败；旧令牌已在服务器失效"); }
+    this.preserveLegacyDeviceToken = false;
     this.settings.deviceToken = "";
     this.settings.deviceId = "";
     this.settings.boundAccount = "";
