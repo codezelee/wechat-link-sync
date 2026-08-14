@@ -2,8 +2,15 @@ name: Release Obsidian plugin
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "[0-9]+.[0-9]+.[0-9]+"
+    paths:
+      - manifest.json
+      - package.json
+      - package-lock.json
+      - .github/workflows/release.yml
   workflow_dispatch:
 
 permissions:
