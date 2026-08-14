@@ -37,7 +37,7 @@ WeChat Link Sync is an Obsidian desktop plugin that receives article links from 
 
 在 Obsidian 中打开“设置 → 第三方插件”，安装并启用 **WeChat Link Sync**。在插件选项中可以设置文章目录、图片保存方式和提醒方式。
 
-当前版本仅支持 Obsidian 桌面端（Windows 与 macOS）。在正式进入社区插件库前，也可以从 [Releases](https://github.com/codezelee/wechat-link-sync/releases/latest) 下载 `main.js`、`manifest.json` 和 `styles.css`，放入：
+当前版本仅支持 Obsidian 桌面端（Windows 与 macOS）。在正式进入社区插件库前，可以从 [Releases](https://github.com/codezelee/wechat-link-sync/releases/latest) 下载 `wechat-link-sync-<版本号>.zip`。解压后，将包含 `main.js`、`manifest.json` 和 `styles.css` 的文件夹放入：
 
 ```text
 <Vault>/.obsidian/plugins/wechat-link-sync/
