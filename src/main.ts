@@ -12,6 +12,7 @@ import {
 } from "./contracts.js";
 import { ApiClient, ApiError } from "./api-client.js";
 import { fetchArticlePreview } from "./article-preview.js";
+import { ARTICLE_PREVIEW_PARSER_VERSION } from "./article-preview-parser.js";
 import { fetchAndParse, ProcessingError } from "./article-service.js";
 import { buildCapturePresentation, type CapturePresentation } from "./capture-presentation.js";
 import { InboxView, INBOX_VIEW_TYPE } from "./inbox-view.js";
@@ -77,12 +78,15 @@ export default class ArticleInboxPlugin extends Plugin {
   private deferredInboxRefresh = false;
   private localLinkProcessing = false;
   private preserveLegacyDeviceToken = false;
+  private lastActiveFile: TFile | null = null;
 
   async onload(): Promise<void> {
     const saved = await this.loadData() as (Partial<ArticleInboxSettings> & Record<string, unknown>) | null;
     const current = { ...(saved ?? {}) };
+    const hadPersistedServerUrl = Object.prototype.hasOwnProperty.call(current, "serverUrl");
     const legacyDeviceToken = typeof current.deviceToken === "string" ? current.deviceToken.trim() : "";
     delete current.deviceToken;
+    delete current.serverUrl;
     const hasRetiredProcessedHistory = [
       "processedHistoryClearedAt",
       "processedHistoryBaselineCount",
@@ -127,7 +131,7 @@ export default class ArticleInboxPlugin extends Plugin {
     }
     this.restoreCachedList("pending");
     if (hasRetiredProcessedHistory) await this.saveSettings();
-    else if (secretMigrationCompleted) await this.saveSettings();
+    else if (secretMigrationCompleted || hadPersistedServerUrl) await this.saveSettings();
     this.api = new ApiClient(() => this.settings);
     this.writer = new VaultWriter(this.app);
     this.realtime = new RealtimeClient(
@@ -150,6 +154,10 @@ export default class ArticleInboxPlugin extends Plugin {
     this.addCommand({ id: "process-pending", name: "全部处理未处理文章", callback: () => this.startBatch() });
     this.addCommand({ id: "open-local-article-link", name: "打开本地链接处理入口", callback: () => this.openInbox() });
     this.addCommand({ id: "reconnect", name: "重新连接实时提醒", callback: () => this.reconnect() });
+    this.lastActiveFile = this.app.workspace.getActiveFile();
+    this.registerEvent(this.app.workspace.on("file-open", (file) => {
+      if (file) this.lastActiveFile = file;
+    }));
 
     this.app.workspace.onLayoutReady(async () => {
       try { await this.writer.removeEmptyLegacyRoots(); }
@@ -178,6 +186,7 @@ export default class ArticleInboxPlugin extends Plugin {
   async saveSettings(): Promise<void> {
     const persisted: Partial<ArticleInboxSettings> = { ...this.settings };
     if (!this.preserveLegacyDeviceToken) delete persisted.deviceToken;
+    delete persisted.serverUrl;
     if (!this.settings.ignoredCaptures.length) delete persisted.ignoredCaptures;
     await this.saveData(persisted);
   }
@@ -316,6 +325,28 @@ export default class ArticleInboxPlugin extends Plugin {
     return true;
   }
 
+  async revealActiveFileInExplorer(): Promise<boolean> {
+    const file = this.app.workspace.getActiveFile() ?? this.lastActiveFile;
+    if (!file) { new Notice("请先打开要在文件列表中定位的文章"); return false; }
+    const leaf = this.app.workspace.getLeavesOfType("file-explorer")[0];
+    const explorer = leaf?.view as unknown as {
+      revealInFolder?: (target: TFile) => void | Promise<void>;
+    } | undefined;
+    if (!leaf || typeof explorer?.revealInFolder !== "function") {
+      new Notice("无法打开文件列表，请先启用 Obsidian 核心插件“文件列表”");
+      return false;
+    }
+    try {
+      await this.app.workspace.revealLeaf(leaf);
+      await Promise.resolve(explorer.revealInFolder(file));
+      return true;
+    } catch (error) {
+      this.remember(error);
+      new Notice("无法在文件列表中定位当前文件");
+      return false;
+    }
+  }
+
   isLocalLinkProcessing(): boolean { return this.localLinkProcessing; }
 
   async processLocalUrl(input: string): Promise<boolean> {
@@ -364,6 +395,7 @@ export default class ArticleInboxPlugin extends Plugin {
     if (this.state.processing || this.localLinkProcessing) { new Notice("请等待当前处理任务结束"); return; }
     this.cancelRequested = false;
     const report: BatchReport = { total: 0, success: 0, failed: 0, skipped: 0, startedAt: Date.now(), finishedAt: 0 };
+    let firstSuccessfulCaptureId: string | null = null;
     this.state.processing = true; delete this.state.report; this.emit();
     try {
       const attempted = new Set<string>();
@@ -380,6 +412,7 @@ export default class ArticleInboxPlugin extends Plugin {
           this.state.progressCurrent += 1; this.emit();
           const outcome = await this.processCapture(summary.id, false);
           report[outcome] += 1;
+          if (outcome === "success" && !firstSuccessfulCaptureId) firstSuccessfulCaptureId = summary.id;
         }
       }
     } catch (error) {
@@ -390,6 +423,7 @@ export default class ArticleInboxPlugin extends Plugin {
       await this.reconcileAfterProcessing();
       this.flashCompletion();
       if (this.settings.openReport && report.total) new Notice(`处理完成：成功 ${report.success}，失败 ${report.failed}，跳过 ${report.skipped}`);
+      if (firstSuccessfulCaptureId) await this.openLocalCapture(firstSuccessfulCaptureId);
     }
   }
 
@@ -401,6 +435,7 @@ export default class ArticleInboxPlugin extends Plugin {
 
   async reprocessProcessedCapture(id: string): Promise<void> {
     if (this.state.processing || this.localLinkProcessing) { new Notice("请等待当前处理任务结束"); return; }
+    let shouldOpen = false;
     this.state.processing = true;
     this.state.progressCurrent = 1;
     this.state.progressTotal = 1;
@@ -413,6 +448,7 @@ export default class ArticleInboxPlugin extends Plugin {
       this.upsertLocalCaptureRecord(capture, article, written.path);
       this.settings.capturePreviews = this.settings.capturePreviews.filter((item) => item.captureId !== id);
       await this.saveSettings();
+      shouldOpen = true;
       new Notice(written.warnings.length ? `再次处理完成，含 ${written.warnings.length} 条图片提示` : "再次处理完成，已更新原文章");
     } catch (error) {
       this.remember(error);
@@ -423,6 +459,7 @@ export default class ArticleInboxPlugin extends Plugin {
       this.state.progressTotal = 0;
       this.emit();
     }
+    if (shouldOpen) await this.openLocalCapture(id);
   }
 
   async processPendingCapture(id: string): Promise<void> {
@@ -535,13 +572,16 @@ export default class ArticleInboxPlugin extends Plugin {
     if (this.state.processing || this.localLinkProcessing) { new Notice("请等待当前处理任务结束"); return; }
     this.state.processing = true; this.state.progressCurrent = 1; this.state.progressTotal = 1; this.emit();
     const startedAt = Date.now();
+    let shouldOpen = false;
     try {
       const outcome = await this.processCapture(id, retry);
+      shouldOpen = outcome === "success";
       this.state.report = { total: 1, success: outcome === "success" ? 1 : 0, failed: outcome === "failed" ? 1 : 0, skipped: outcome === "skipped" ? 1 : 0, startedAt, finishedAt: Date.now() };
     } finally {
       this.state.processing = false; this.state.progressCurrent = 0; this.state.progressTotal = 0;
       await this.reconcileAfterProcessing();
       this.flashCompletion();
+      if (shouldOpen) await this.openLocalCapture(id);
     }
   }
 
@@ -680,7 +720,10 @@ export default class ArticleInboxPlugin extends Plugin {
     for (const report of this.settings.pendingReports) {
       try { await this.api.complete(report); }
       catch (error) {
-        if (!(error instanceof ApiError) || (error.status >= 500 || error.status === 0)) retained.push(report);
+        // Keep every report that may become deliverable after a connection,
+        // authentication, client or server fix. Only an expired lease is
+        // definitively impossible to complete and should be discarded.
+        if (!(error instanceof ApiError) || (error.status !== 410 && error.code !== "LEASE_EXPIRED")) retained.push(report);
         this.remember(error);
       }
     }
@@ -862,6 +905,7 @@ export default class ArticleInboxPlugin extends Plugin {
           this.upsertCapturePreview({
             captureId: capture.id,
             captureUpdatedAt: capture.updatedAt,
+            parserVersion: ARTICLE_PREVIEW_PARSER_VERSION,
             ...preview,
             fetchedAt: new Date().toISOString(),
             errorMessage: null
@@ -870,6 +914,7 @@ export default class ArticleInboxPlugin extends Plugin {
           this.upsertCapturePreview({
             captureId: capture.id,
             captureUpdatedAt: capture.updatedAt,
+            parserVersion: ARTICLE_PREVIEW_PARSER_VERSION,
             title: null,
             author: null,
             publishedAt: null,
@@ -893,9 +938,10 @@ export default class ArticleInboxPlugin extends Plugin {
   }
 
   private previewNeedsRefresh(capture: CaptureSummary): boolean {
-    if (capture.title && capture.author && capture.coverUrl) return false;
+    if (capture.title && capture.author && capture.publishedAt && capture.coverUrl) return false;
     const preview = this.capturePreview(capture.id);
     if (!preview || preview.captureUpdatedAt !== capture.updatedAt) return true;
+    if (preview.parserVersion !== ARTICLE_PREVIEW_PARSER_VERSION) return true;
     const age = Date.now() - new Date(preview.fetchedAt).getTime();
     const lifetime = preview.errorMessage ? 60 * 60 * 1000 : 30 * 24 * 60 * 60 * 1000;
     return !Number.isFinite(age) || age > lifetime;

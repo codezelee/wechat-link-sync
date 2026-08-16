@@ -35,6 +35,7 @@ export interface LocalCaptureRecord {
 export interface CapturePreviewRecord {
   captureId: string;
   captureUpdatedAt: string;
+  parserVersion?: number;
   title: string | null;
   author: string | null;
   publishedAt: string | null;

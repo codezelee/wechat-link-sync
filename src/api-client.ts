@@ -13,6 +13,7 @@ import type {
 } from "./contracts.js";
 import { PLUGIN_VERSION, type ArticleInboxSettings, type PendingReport, type UpdateRange } from "./models.js";
 import { buildJsonRequest } from "./http-request.js";
+import { normalizePublishedAtForApi } from "./published-at.js";
 
 export class ApiError extends Error {
   constructor(
@@ -69,7 +70,7 @@ export class ApiClient {
         sourceName: report.sourceName,
         title: report.title,
         author: report.author,
-        publishedAt: report.publishedAt,
+        publishedAt: normalizePublishedAtForApi(report.publishedAt),
         coverUrl: report.coverUrl
       }
     });

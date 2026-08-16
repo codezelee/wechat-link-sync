@@ -11,9 +11,7 @@ export class ArticleInboxSettingTab extends PluginSettingTab {
     containerEl.addClass("article-inbox-settings");
     containerEl.createEl("p", { text: "状态和列表会实时更新；文章只会在你点击“全部处理”或单条“处理”后写入当前 Vault。", cls: "setting-item-description article-inbox-settings-lead" });
 
-    section(containerEl, "连接与绑定", "服务器与当前桌面客户端");
-    new Setting(containerEl).setName("服务器地址").setDesc("正式环境应使用 HTTPS，WebSocket 地址会自动派生。")
-      .addText((text) => text.setPlaceholder("https://api.example.com").setValue(settings.serverUrl).onChange(async (value) => { settings.serverUrl = value.trim().replace(/\/$/, ""); await this.plugin.saveSettings(); }));
+    section(containerEl, "连接与绑定", "当前桌面客户端");
     new Setting(containerEl).setName("连接测试").setDesc("只检查服务、证书和协议版本，不创建绑定。")
       .addButton((button) => button.setButtonText("测试").onClick(async () => {
         button.setDisabled(true); try { const result = await this.plugin.testConnection(); new Notice(`连接正常 · 协议 v${result.protocolVersion}`); } catch (error) { new Notice(messageOf(error)); } finally { button.setDisabled(false); }
