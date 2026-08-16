@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.7.1
+
+- Preserve visual underlines represented by CSS text decoration or bottom borders when converting WeChat articles to Markdown.
+- Preserve explicit inline text colors while avoiding redundant inherited-color markup.
+- Keep bilingual section headings and trailing labels such as `INTERACTIONS` on the same heading line.
+- Improve publication-time extraction and local article-processing status handling.
+
 ## 1.7.0
 
 - Store the bound device token with Obsidian `SecretStorage` instead of plain-text plugin settings.
