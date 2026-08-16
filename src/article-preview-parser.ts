@@ -1,4 +1,7 @@
 import { isSafePublicUrl } from "./path-utils.js";
+import { extractPublishedAt } from "./published-at.js";
+
+export const ARTICLE_PREVIEW_PARSER_VERSION = 2;
 
 export interface ArticlePreview {
   title: string | null;
@@ -20,11 +23,7 @@ export function parseArticlePreview(html: string, sourceUrl: string): ArticlePre
     meta(document, "author"),
     meta(document, "article:author")
   );
-  const publishedAt = firstText(
-    text(document.querySelector("#publish_time")),
-    meta(document, "article:published_time"),
-    meta(document, "date")
-  );
+  const publishedAt = extractPublishedAt(document);
   const image = firstText(
     meta(document, "og:image"),
     meta(document, "twitter:image"),
@@ -61,4 +60,3 @@ function absolutePublicUrl(value: string | null, base: string): string | null {
     return isSafePublicUrl(result) ? result : null;
   } catch { return null; }
 }
-

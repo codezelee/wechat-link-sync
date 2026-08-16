@@ -56,6 +56,12 @@ export class InboxView extends ItemView {
     }
 
     const localCard = contentEl.createDiv({ cls: "article-inbox-local-card" });
+    const revealCurrentFile = localCard.createEl("button", {
+      cls: "clickable-icon article-inbox-corner-tool article-inbox-local-reveal",
+      attr: { "aria-label": "在文件列表中定位当前文件", title: "在文件列表中定位当前文件" }
+    });
+    setIcon(revealCurrentFile, "chevrons-left-right");
+    revealCurrentFile.addEventListener("click", () => void this.plugin.revealActiveFileInExplorer());
     const localText = localCard.createDiv({ cls: "article-inbox-local-copy" });
     localText.createEl("strong", { text: "本地处理链接" });
     localText.createSpan({ text: "直接解析并写入当前 Vault，不会创建或上传服务器记录" });
@@ -96,7 +102,7 @@ export class InboxView extends ItemView {
 
     const actionCard = contentEl.createDiv({ cls: "article-inbox-action-card" });
     const refresh = actionCard.createEl("button", {
-      cls: "clickable-icon article-inbox-action-refresh",
+      cls: "clickable-icon article-inbox-corner-tool article-inbox-action-refresh",
       attr: { "aria-label": "刷新文章记录", title: "刷新文章记录" }
     });
     setIcon(refresh, "refresh-cw");

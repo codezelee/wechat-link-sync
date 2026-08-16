@@ -2,12 +2,17 @@ import DefuddlePackage from "defuddle/full";
 import type { DefuddleOptions, DefuddleResponse } from "defuddle";
 import TurndownService from "turndown";
 import type { ParsedArticle } from "./models.js";
+import { extractPublishedAt } from "./published-at.js";
 
-const EXTRACTOR_VERSION = "2.1.0";
+const EXTRACTOR_VERSION = "2.5.0";
 const MINIMUM_CONTENT_LENGTH = 40;
 const IMAGE_MARKER_PREFIX = "ARTICLEINBOXIMAGE";
 const IMAGE_MARKER_SUFFIX = "END";
+const UNDERLINE_MARKER_PREFIX = "ARTICLEINBOXUNDERLINE";
+const COLOR_MARKER_PREFIX = "ARTICLEINBOXCOLOR";
 const CODE_FONT_PATTERN = /(?:monospace|menlo|monaco|consolas|courier)/i;
+const VISUAL_CODE_LINE_PATTERN = /(?:^|[-_\s])(?:code[-_]?snippet[-_]+(?:outer|line)|code[-_]?line|line[-_]?content|hljs[-_]?ln[-_]?code)(?:[-_\s]|$)/i;
+const CODE_LINE_INDEX_PATTERN = /(?:line[-_ ]?number|code[-_ ]?index|code[-_]?snippet[-_]+line[-_]+index)/i;
 const BLOCK_TAGS = new Set([
   "ADDRESS", "ARTICLE", "ASIDE", "BLOCKQUOTE", "DIV", "FIGCAPTION", "FIGURE",
   "FOOTER", "HEADER", "LI", "MAIN", "NAV", "P", "SECTION", "TR"
@@ -25,12 +30,14 @@ export function parseArticle(html: string, sourceUrl: string): ParsedArticle {
   // Preserve page metadata before Defuddle sanitizes and normalizes the document.
   const pageTitle = text(document.querySelector("#activity-name")) || meta(document, "og:title") || document.title;
   const pageAuthor = text(document.querySelector("#js_name")) || meta(document, "author");
-  const pagePublishedAt = text(document.querySelector("#publish_time")) || meta(document, "article:published_time");
+  const pagePublishedAt = extractPublishedAt(document);
 
   absolutizeImages(document, sourceUrl);
   const extractionRoot = wechatContent ?? document.body;
   const headingColors = isWechat ? collectHeadingColors(extractionRoot) : [];
   if (isWechat) preserveWechatSemantics(extractionRoot);
+  const markedUnderlines = isWechat ? markUnderlines(extractionRoot) : [];
+  const markedColors = isWechat ? markTextColors(extractionRoot) : [];
   const markedImages = markImages(extractionRoot);
   const result = new Defuddle(document, {
     url: sourceUrl,
@@ -48,7 +55,13 @@ export function parseArticle(html: string, sourceUrl: string): ParsedArticle {
   }).parse();
 
   const title = cleanTitle((isWechat ? pageTitle : result.title) || pageTitle, sourceUrl);
-  const restored = restoreImageMarkers(markdownFromResult(result.contentMarkdown, result.content), markedImages);
+  const restored = restoreTextColorMarkers(
+    restoreUnderlineMarkers(
+      restoreImageMarkers(markdownFromResult(result.contentMarkdown, result.content), markedImages),
+      markedUnderlines
+    ),
+    markedColors
+  );
   const markdown = applyHeadingColors(normalizeMarkdown(restored, title), headingColors);
   if (visibleLength(markdown) < MINIMUM_CONTENT_LENGTH) {
     throw new Error("CONTENT_NOT_FOUND: 未提取到有效正文");
@@ -72,6 +85,19 @@ interface MarkedImage {
   alt: string;
 }
 
+interface MarkedUnderline {
+  startMarker: string;
+  endMarker: string;
+  openingTag: string;
+  closingTag: string;
+}
+
+interface MarkedTextColor {
+  startMarker: string;
+  endMarker: string;
+  color: string;
+}
+
 interface HeadingColor {
   text: string;
   color: string;
@@ -92,11 +118,132 @@ function preserveInlineBold(root: ParentNode): void {
     const weight = element.style.fontWeight.trim().toLowerCase();
     const numericWeight = /^\d+$/.test(weight) ? Number(weight) : 0;
     if (weight !== "bold" && weight !== "bolder" && numericWeight < 600) return;
+    // Keep bold inside the same safe HTML span as a visual underline. Markdown
+    // emphasis nested inside inline HTML is displayed literally by Obsidian.
+    if (underlineTags(element)) return;
     const strong = element.ownerDocument.createElement("strong");
     while (element.firstChild) strong.appendChild(element.firstChild);
     element.appendChild(strong);
     element.style.removeProperty("font-weight");
   });
+}
+
+function markUnderlines(root: ParentNode): MarkedUnderline[] {
+  const candidates = [...root.querySelectorAll<HTMLElement>("u, ins, [style]")]
+    .map((element) => ({ element, tags: underlineTags(element) }))
+    .filter((candidate): candidate is { element: HTMLElement; tags: { openingTag: string; closingTag: string } } => Boolean(candidate.tags))
+    .filter(({ element }, _index, all) => !all.some((ancestor) => ancestor.element !== element && ancestor.element.contains(element)))
+    .filter(({ element }) => Boolean(element.textContent?.trim()))
+    .filter(({ element }) => !element.querySelector("address, article, aside, blockquote, div, figure, footer, header, img, li, main, nav, p, pre, section, table"));
+
+  return candidates.map(({ element, tags }, index) => {
+    const markerId = String(index + 1).padStart(6, "0");
+    const startMarker = `${UNDERLINE_MARKER_PREFIX}${markerId}START`;
+    const endMarker = `${UNDERLINE_MARKER_PREFIX}${markerId}END`;
+    element.prepend(element.ownerDocument.createTextNode(startMarker));
+    element.append(element.ownerDocument.createTextNode(endMarker));
+    return { startMarker, endMarker, ...tags };
+  });
+}
+
+function underlineTags(element: HTMLElement): { openingTag: string; closingTag: string } | null {
+  const borderBottom = safeBottomBorder(element);
+  const fontWeight = safeInlineFontWeight(element);
+  const withWeight = (styles: string[]): string => [...styles, ...(fontWeight ? [`font-weight: ${fontWeight}`] : [])].join("; ");
+  if (borderBottom && isInlineElement(element)) {
+    return { openingTag: `<span style="${withWeight([`border-bottom: ${borderBottom}`])}">`, closingTag: "</span>" };
+  }
+  if (element.tagName === "U" || element.tagName === "INS") {
+    return fontWeight
+      ? { openingTag: `<u style="font-weight: ${fontWeight}">`, closingTag: "</u>" }
+      : { openingTag: "<u>", closingTag: "</u>" };
+  }
+  const decoration = [
+    element.style.textDecoration,
+    element.style.textDecorationLine,
+    element.style.getPropertyValue("-webkit-text-decoration")
+  ].join(" ");
+  if (!/(?:^|\s)underline(?:\s|$)/i.test(decoration)) return null;
+  const color = safeCssColor(element.style.textDecorationColor);
+  if (color || fontWeight) {
+    const styles = ["text-decoration-line: underline", ...(color ? [`text-decoration-color: ${color}`] : [])];
+    return { openingTag: `<span style="${withWeight(styles)}">`, closingTag: "</span>" };
+  }
+  return { openingTag: "<u>", closingTag: "</u>" };
+}
+
+function safeInlineFontWeight(element: HTMLElement): string | null {
+  const weight = element.style.fontWeight.trim().toLowerCase();
+  if (weight === "bold" || weight === "bolder") return "bold";
+  if (!/^\d{3}$/.test(weight)) return null;
+  const numeric = Number(weight);
+  return numeric >= 600 && numeric <= 900 ? String(numeric) : null;
+}
+
+function safeBottomBorder(element: HTMLElement): string | null {
+  const width = element.style.borderBottomWidth.trim().toLowerCase();
+  const style = element.style.borderBottomStyle.trim().toLowerCase();
+  const color = safeCssColor(element.style.borderBottomColor);
+  const safeWidth = /^(?:thin|medium|thick|(?:0*\.)?[0-9]+(?:px|em|rem))$/.test(width) && !/^0(?:px|em|rem)?$/.test(width);
+  if (!safeWidth || !/^(?:solid|dashed|dotted|double)$/.test(style) || !color) return null;
+  return `${width} ${style} ${color}`;
+}
+
+function isInlineElement(element: HTMLElement): boolean {
+  return /^(?:A|B|CODE|DEL|EM|I|INS|KBD|MARK|S|SMALL|SPAN|STRONG|SUB|SUP|U)$/.test(element.tagName);
+}
+
+function markTextColors(root: ParentNode): MarkedTextColor[] {
+  const candidates = [...root.querySelectorAll<HTMLElement>("[style]")]
+    .map((element) => ({ element, color: declaredTextColor(element) }))
+    .filter((candidate): candidate is { element: HTMLElement; color: string } => Boolean(candidate.color))
+    .filter(({ element, color }) => !sameCssColor(color, inheritedTextColor(element)))
+    .filter(({ element }) => Boolean(element.textContent?.trim()))
+    .filter(({ element }) => !element.querySelector("address, article, aside, blockquote, div, figure, footer, header, img, li, main, nav, p, pre, section, table"));
+
+  return candidates.map(({ element, color }, index) => {
+    const markerId = String(index + 1).padStart(6, "0");
+    const startMarker = `${COLOR_MARKER_PREFIX}${markerId}START`;
+    const endMarker = `${COLOR_MARKER_PREFIX}${markerId}END`;
+    element.prepend(element.ownerDocument.createTextNode(startMarker));
+    element.append(element.ownerDocument.createTextNode(endMarker));
+    return { startMarker, endMarker, color };
+  });
+}
+
+function inheritedTextColor(element: HTMLElement): string | null {
+  let parent = element.parentElement;
+  while (parent) {
+    const color = declaredTextColor(parent);
+    if (color) return color;
+    parent = parent.parentElement;
+  }
+  return null;
+}
+
+function declaredTextColor(element: HTMLElement): string | null {
+  const parsed = safeCssColor(element.style.color || element.style.webkitTextFillColor);
+  if (parsed) return parsed;
+  const declarations = element.getAttribute("style")?.split(";") ?? [];
+  for (const declaration of declarations) {
+    const match = /^\s*(?:color|-webkit-text-fill-color)\s*:\s*(.+?)\s*$/i.exec(declaration);
+    const color = match ? safeCssColor(match[1]!) : null;
+    if (color) return color;
+  }
+  return null;
+}
+
+function sameCssColor(left: string | null, right: string | null): boolean {
+  if (!left || !right) return left === right;
+  return comparableCssColor(left) === comparableCssColor(right);
+}
+
+function comparableCssColor(value: string): string {
+  const color = value.trim().toLowerCase().replace(/\s+/g, "");
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/.exec(color)?.[1];
+  if (!hex) return color;
+  const expanded = hex.length === 3 ? [...hex].map((digit) => `${digit}${digit}`).join("") : hex;
+  return `rgb(${Number.parseInt(expanded.slice(0, 2), 16)},${Number.parseInt(expanded.slice(2, 4), 16)},${Number.parseInt(expanded.slice(4, 6), 16)})`;
 }
 
 function preserveVisualCodeLines(root: ParentNode): void {
@@ -133,18 +280,26 @@ function visualTextContent(root: HTMLElement): string {
       if (!/^\s+$/.test(value) || !value.includes("\n")) output.push(value);
       return;
     }
-    if (!(node.instanceOf(Element))) return;
+    if (!(node instanceof Element)) return;
     if (node.tagName === "BR") {
       appendNewline();
       return;
     }
     const html = node as HTMLElement;
     const className = typeof html.className === "string" ? html.className : "";
-    if (/(?:line[-_ ]?number|code[-_ ]?index)/i.test(className)) return;
-    const isBlock = BLOCK_TAGS.has(node.tagName) || html.style.display === "block";
-    if (isBlock) appendNewline();
+    if (CODE_LINE_INDEX_PATTERN.test(className)) return;
+    const parent = node.parentElement;
+    const isSiblingCodeLine = node.tagName === "CODE"
+      && parent?.tagName === "PRE"
+      && parent.children.length > 1
+      && [...parent.children].every((child) => child.tagName === "CODE");
+    const isVisualLine = isSiblingCodeLine
+      || BLOCK_TAGS.has(node.tagName)
+      || html.style.display === "block"
+      || VISUAL_CODE_LINE_PATTERN.test(className);
+    if (isVisualLine) appendNewline();
     node.childNodes.forEach(visit);
-    if (isBlock) appendNewline();
+    if (isVisualLine) appendNewline();
   };
   root.childNodes.forEach(visit);
   return output.join("")
@@ -176,6 +331,26 @@ function restoreImageMarkers(markdown: string, images: MarkedImage[]): string {
   return restored;
 }
 
+function restoreUnderlineMarkers(markdown: string, underlines: MarkedUnderline[]): string {
+  let restored = markdown;
+  for (const underline of underlines) {
+    restored = restored
+      .split(underline.startMarker).join(underline.openingTag)
+      .split(underline.endMarker).join(underline.closingTag);
+  }
+  return restored;
+}
+
+function restoreTextColorMarkers(markdown: string, colors: MarkedTextColor[]): string {
+  let restored = markdown;
+  for (const color of colors) {
+    restored = restored
+      .split(color.startMarker).join(`<span style="color: ${color.color}">`)
+      .split(color.endMarker).join("</span>");
+  }
+  return restored;
+}
+
 function uniqueImages(images: MarkedImage[]): Array<{ url: string; alt: string }> {
   return images
     .filter((image, index, all) => all.findIndex((candidate) => candidate.url === image.url) === index)
@@ -200,7 +375,16 @@ function collectHeadingColors(root: ParentNode): HeadingColor[] {
 
 function applyHeadingColors(markdown: string, colors: HeadingColor[]): string {
   if (!colors.length) return markdown;
+  let inFence = false;
+  let fenceMarker = "";
   return markdown.split("\n").map((line) => {
+    const fence = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence) {
+      if (!inFence) { inFence = true; fenceMarker = fence[0]!; }
+      else if (fence[0] === fenceMarker) { inFence = false; fenceMarker = ""; }
+      return line;
+    }
+    if (inFence) return line;
     const heading = /^(#{2,6})\s+(.+?)\s*$/.exec(line);
     if (!heading) return line;
     const plainText = plainMarkdownText(heading[2]!);
@@ -253,20 +437,92 @@ function normalizeMarkdown(input: string, title: string): string {
   let markdown = input
     .replace(/\r\n?/g, "\n")
     .replace(/[ \t]+$/gm, "")
-    .replace(/^#{1,6}[ \t]*$/gm, "")
-    .replace(/^# ([^#].*)$/gm, "## $1")
     .replace(/^```(?:js|javascript|ts|typescript|css)\n([\s\S]*?)^```$/gim, (_match, content: string) => {
       return looksLikeProse(content) ? `\`\`\`\n${content}\`\`\`` : _match;
     })
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  const lines = markdown.split("\n").filter((line) => {
-    const heading = /^#{1,6}\s+(.+?)\s*$/.exec(line);
-    return !heading || !sameText(heading[1]!, title);
-  });
-  markdown = lines.join("\n").replace(/^\n+/, "").replace(/\n{3,}/g, "\n\n").trim();
+  markdown = normalizeHeadingsOutsideFences(markdown, title);
+  markdown = normalizeCompositeHeadingsOutsideFences(markdown);
   return markdown;
+}
+
+function normalizeHeadingsOutsideFences(markdown: string, title: string): string {
+  const lines: string[] = [];
+  let inFence = false;
+  let fenceMarker = "";
+  for (const original of markdown.split("\n")) {
+    const fence = /^\s*(`{3,}|~{3,})/.exec(original)?.[1];
+    if (fence) {
+      if (!inFence) { inFence = true; fenceMarker = fence[0]!; }
+      else if (fence[0] === fenceMarker) { inFence = false; fenceMarker = ""; }
+      lines.push(original);
+      continue;
+    }
+    if (inFence) {
+      lines.push(original);
+      continue;
+    }
+    const line = original
+      .replace(/^#{1,6}[ \t]*$/, "")
+      .replace(/^# ([^#].*)$/, "## $1");
+    const heading = /^#{1,6}\s+(.+?)\s*$/.exec(line);
+    if (!heading || !sameText(heading[1]!, title)) lines.push(line);
+  }
+  return lines.join("\n").replace(/^\n+/, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function normalizeCompositeHeadingsOutsideFences(markdown: string): string {
+  const lines = markdown.split("\n");
+  const candidates = new Map<number, { title: string; label: string }>();
+  let inFence = false;
+  let fenceMarker = "";
+
+  for (let index = 0; index < lines.length - 2; index += 1) {
+    const line = lines[index]!;
+    const fence = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence) {
+      if (!inFence) { inFence = true; fenceMarker = fence[0]!; }
+      else if (fence[0] === fenceMarker) { inFence = false; fenceMarker = ""; }
+      continue;
+    }
+    if (inFence || lines[index + 1] !== "") continue;
+
+    const title = line.trim();
+    const label = lines[index + 2]!.trim();
+    const plainTitle = plainMarkdownText(title);
+    const plainLabel = plainMarkdownText(label);
+    if (/^(?:#{1,6}\s|>\s|[-*+]\s|\d+[.)]\s|`{3,}|~{3,}|!\[)/.test(title)) continue;
+    if (!/[\u3400-\u9fff][^\n]*[，,][^\n]*[\u3400-\u9fffA-Za-z]/.test(plainTitle)) continue;
+    if (plainTitle.length < 4 || plainTitle.length > 80 || /[。！？!?；;：:]$/.test(plainTitle)) continue;
+    if (!/^[A-Z][A-Z0-9 ./&+-]{1,23}$/.test(plainLabel) || !/[A-Z]{2}/.test(plainLabel)) continue;
+    candidates.set(index, { title, label });
+  }
+
+  // Repeated bilingual labels are a strong signal for this WeChat heading
+  // pattern; requiring two avoids promoting an incidental all-caps paragraph.
+  if (candidates.size < 2) return markdown;
+
+  const output: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const candidate = candidates.get(index);
+    if (!candidate) {
+      output.push(lines[index]!);
+      continue;
+    }
+    const labelText = plainMarkdownText(candidate.label);
+    const labelColor = inlineColor(candidate.label);
+    const labelStyle = labelColor ? `white-space: nowrap; color: ${labelColor}` : "white-space: nowrap";
+    output.push(`## ${candidate.title} <span style="${labelStyle}">${escapeHtml(labelText)}</span>`);
+    index += 2;
+  }
+  return output.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function inlineColor(value: string): string | null {
+  const match = /^<span style="color:\s*([^"]+)">[^<]*<\/span>$/.exec(value.trim());
+  return match ? safeCssColor(match[1]!) : null;
 }
 
 function looksLikeProse(content: string): boolean {
@@ -308,4 +564,3 @@ function text(node: Element | null): string { return node?.textContent?.trim() ?
 function meta(document: Document, property: string): string {
   return document.querySelector<HTMLMetaElement>(`meta[property="${property}"],meta[name="${property}"]`)?.content?.trim() ?? "";
 }
-
