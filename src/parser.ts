@@ -4,7 +4,7 @@ import TurndownService from "turndown";
 import type { ParsedArticle } from "./models.js";
 import { extractPublishedAt } from "./published-at.js";
 
-const EXTRACTOR_VERSION = "2.8.0";
+const EXTRACTOR_VERSION = "2.9.0";
 const MINIMUM_CONTENT_LENGTH = 40;
 const IMAGE_MARKER_PREFIX = "ARTICLEINBOXIMAGE";
 const IMAGE_MARKER_SUFFIX = "END";
@@ -14,6 +14,7 @@ const FONT_SIZE_MARKER_PREFIX = "ARTICLEINBOXFONTSIZE";
 const CENTER_ALIGNMENT_MARKER_PREFIX = "ARTICLEINBOXCENTER";
 const BLOCK_STYLE_MARKER_PREFIX = "ARTICLEINBOXBLOCKSTYLE";
 const BLOCK_HTML_MARKER_PREFIX = "ARTICLEINBOXBLOCKHTML";
+const SAFE_HTML_MARKER_PREFIX = "ARTICLEINBOXSAFEHTML";
 const CENTERABLE_BLOCK_SELECTOR = "center, div, figcaption, h1, h2, h3, h4, h5, h6, p, section";
 const STYLEABLE_BLOCK_SELECTOR = "address, article, aside, blockquote, div, figcaption, figure, footer, header, li, main, nav, p, section";
 const FONT_SIZE_CANDIDATE_SELECTOR = "a, b, code, del, div, em, figcaption, h1, h2, h3, h4, h5, h6, i, ins, kbd, mark, p, s, section, small, span, strong, sub, sup, u";
@@ -42,6 +43,11 @@ export function parseArticle(html: string, sourceUrl: string): ParsedArticle {
   absolutizeImages(document, sourceUrl);
   const extractionRoot = wechatContent ?? document.body;
   const headingColors = isWechat ? collectHeadingColors(extractionRoot) : [];
+  const markedSafeHtml = isWechat ? [
+    ...markRichCodeBlocks(extractionRoot),
+    ...markStyledHeadings(extractionRoot),
+    ...markInlineCodes(extractionRoot)
+  ] : [];
   if (isWechat) preserveWechatSemantics(extractionRoot);
   const markedUnderlines = isWechat ? markUnderlines(extractionRoot) : [];
   const markedColors = isWechat ? markTextColors(extractionRoot) : [];
@@ -72,7 +78,10 @@ export function parseArticle(html: string, sourceUrl: string): ParsedArticle {
         restoreFontSizeMarkers(
           restoreTextColorMarkers(
             restoreUnderlineMarkers(
-              restoreImageMarkers(markdownFromResult(result.contentMarkdown, result.content), markedImages),
+              restoreSafeHtmlMarkers(
+                restoreImageMarkers(markdownFromResult(result.contentMarkdown, result.content), markedImages),
+                markedSafeHtml
+              ),
               markedUnderlines
             ),
             markedColors
@@ -145,6 +154,12 @@ interface MarkedBlockHtml {
   closingTag: string;
 }
 
+interface MarkedSafeHtml {
+  marker: string;
+  html: string;
+  block: boolean;
+}
+
 interface HeadingColor {
   text: string;
   color: string;
@@ -159,10 +174,147 @@ function preserveWechatSemantics(root: ParentNode): void {
   preserveVisualCodeLines(root);
 }
 
+/**
+ * WeChat code cards use one <code> node per visual line and CSS classes for
+ * syntax colours. Preserve a small sanitized HTML card before generic Markdown
+ * conversion flattens that structure.
+ */
+function markRichCodeBlocks(root: ParentNode): MarkedSafeHtml[] {
+  const containers = [...root.querySelectorAll<HTMLElement>("pre")]
+    .filter((pre) => directCodeLines(pre).length > 1)
+    .map((pre) => pre.closest<HTMLElement>("section.code-snippet__fix, section[class*='code-snippet']") ?? pre)
+    .filter((element, index, all) => all.indexOf(element) === index);
+
+  return containers.map((container, index) => {
+    const pre = container.tagName === "PRE" ? container : container.querySelector<HTMLElement>("pre");
+    const lines = pre ? directCodeLines(pre) : [];
+    const marker = safeHtmlMarker("CODEBLOCK", index);
+    const renderedLines = lines.map((line, lineIndex) => {
+      const content = [...line.childNodes].map(serializeCodeNode).join("") || " ";
+      return `<span style="display: block"><span style="display: inline-block; width: 2.5em; margin-right: 0.75em; color: rgb(198, 198, 198); text-align: right; user-select: none">${lineIndex + 1}</span>${content}</span>`;
+    }).join("");
+    const html = `<div style="overflow-x: auto; background-color: rgba(0, 0, 0, 0.03); border: 1px solid rgb(240, 240, 240); border-radius: 2px; margin: 1.5em 0"><pre style="margin: 0; padding: 14px; background: transparent; font-family: Menlo, Monaco, &quot;Courier New&quot;, monospace; font-size: 14px; line-height: 1.75; white-space: pre"><code style="font-family: inherit; color: rgb(51, 51, 51); background: transparent; padding: 0">${renderedLines}</code></pre></div>`;
+    container.replaceWith(container.ownerDocument.createTextNode(marker));
+    return { marker, html, block: true };
+  });
+}
+
+function directCodeLines(pre: HTMLElement): HTMLElement[] {
+  return [...pre.children].filter((child): child is HTMLElement => child instanceof HTMLElement && child.tagName === "CODE");
+}
+
+function serializeCodeNode(node: Node): string {
+  if (node.nodeType === node.TEXT_NODE) return escapeHtml((node.textContent ?? "").replace(/\u00a0/g, " "));
+  if (!(node instanceof Element)) return "";
+  if (node.tagName === "BR") return "\n";
+  const element = node as HTMLElement;
+  const className = typeof element.className === "string" ? element.className : "";
+  const styles: string[] = [];
+  const paletteColor = declaredTextColor(element) ?? codeSyntaxColor(className);
+  if (paletteColor) styles.push(`color: ${paletteColor}`);
+  const fontStyle = cssStyleValue(element, "font-style").trim().toLowerCase();
+  if (fontStyle === "italic" || /code-snippet__comment/.test(className)) styles.push("font-style: italic");
+  const fontWeight = safeInlineFontWeight(element);
+  if (fontWeight) styles.push(`font-weight: ${fontWeight}`);
+  const content = [...element.childNodes].map(serializeCodeNode).join("");
+  return styles.length ? `<span style="${styles.join("; ")}">${content}</span>` : content;
+}
+
+function codeSyntaxColor(className: string): string | null {
+  if (/code-snippet__comment/.test(className)) return "rgb(175, 175, 175)";
+  if (/code-snippet__(?:title|string)/.test(className)) return "rgb(221, 17, 68)";
+  if (/code-snippet__(?:variable|number)/.test(className)) return "rgb(14, 156, 229)";
+  return null;
+}
+
+/** Preserve decorated headings as safe raw HTML so white text keeps its background. */
+function markStyledHeadings(root: ParentNode): MarkedSafeHtml[] {
+  const candidates = [...root.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6")]
+    .map((element) => ({ element, style: safeHeadingStyle(element, root) }))
+    .filter((candidate): candidate is { element: HTMLElement; style: string } => Boolean(candidate.style))
+    .filter(({ element }) => Boolean(element.textContent?.trim()));
+
+  return candidates.map(({ element, style }, index) => {
+    const marker = safeHtmlMarker("HEADING", index);
+    const tag = element.tagName.toLowerCase();
+    const content = escapeHtml((element.textContent ?? "").replace(/\s+/g, " ").trim());
+    const html = `<${tag} style="${escapeHtml(style)}">${content}</${tag}>`;
+    element.replaceWith(element.ownerDocument.createTextNode(marker));
+    return { marker, html, block: true };
+  });
+}
+
+function safeHeadingStyle(element: HTMLElement, root: ParentNode): string | null {
+  const declaredBackground = declaredBackgroundColor(element);
+  const inheritedBackground = inheritedBackgroundColor(element) ?? "rgb(255, 255, 255)";
+  const backgroundColor = declaredBackground && !sameCssColor(declaredBackground, inheritedBackground)
+    ? declaredBackground
+    : null;
+  const fontFamily = safeFontFamily(cssStyleValue(element, "font-family"));
+  if (!backgroundColor && !fontFamily) return null;
+
+  const styles: string[] = [];
+  const color = declaredTextColor(element);
+  const fontSize = declaredFontSize(element);
+  const fontWeight = safeInlineFontWeight(element);
+  const alignment = effectiveTextAlignment(element, root);
+  const display = cssStyleValue(element, "display").trim().toLowerCase();
+  const lineHeight = safeLineHeight(cssStyleValue(element, "line-height"));
+  const boxShadow = safeBoxShadow(cssStyleValue(element, "box-shadow"));
+  if (backgroundColor) styles.push(`background-color: ${backgroundColor}`);
+  if (color) styles.push(`color: ${color}`);
+  if (fontFamily) styles.push(`font-family: ${fontFamily}`);
+  if (fontSize) styles.push(`font-size: ${fontSize}`);
+  if (fontWeight) styles.push(`font-weight: ${fontWeight}`);
+  if (/^(?:left|right|center|justify)$/.test(alignment ?? "")) styles.push(`text-align: ${alignment}`);
+  if (/^(?:block|inline-block|table)$/.test(display)) styles.push(`display: ${display}`);
+  if (lineHeight) styles.push(`line-height: ${lineHeight}`);
+  styles.push(...safeBoxDeclaration("padding", cssStyleValue(element, "padding"), 160));
+  styles.push(...safeBoxDeclaration("border-radius", cssStyleValue(element, "border-radius"), 80));
+  styles.push(...safeMarginDeclaration(cssStyleValue(element, "margin"), 160));
+  if (boxShadow) styles.push(`box-shadow: ${boxShadow}`);
+  if (display === "table") styles.push("max-width: 100%", "box-sizing: border-box", "overflow-wrap: anywhere");
+  return styles.join("; ");
+}
+
+/** Inline code stays HTML when it carries foreground/background/font styles. */
+function markInlineCodes(root: ParentNode): MarkedSafeHtml[] {
+  return [...root.querySelectorAll<HTMLElement>("code")]
+    .filter((element) => !element.closest("pre"))
+    .filter((element) => Boolean(element.textContent))
+    .map((element, index) => {
+      const marker = safeHtmlMarker("INLINECODE", index);
+      const style = safeInlineCodeStyle(element);
+      const html = `<code${style ? ` style="${escapeHtml(style)}"` : ""}>${escapeHtml((element.textContent ?? "").replace(/\u00a0/g, " "))}</code>`;
+      element.replaceWith(element.ownerDocument.createTextNode(marker));
+      return { marker, html, block: false };
+    });
+}
+
+function safeInlineCodeStyle(element: HTMLElement): string {
+  const styles: string[] = [];
+  const color = declaredTextColor(element);
+  const backgroundColor = declaredBackgroundColor(element);
+  const fontFamily = safeFontFamily(cssStyleValue(element, "font-family"));
+  const fontSize = declaredFontSize(element);
+  if (color) styles.push(`color: ${color}`);
+  if (backgroundColor) styles.push(`background-color: ${backgroundColor}`);
+  if (fontFamily) styles.push(`font-family: ${fontFamily}`);
+  if (fontSize) styles.push(`font-size: ${fontSize}`);
+  styles.push(...safeBoxDeclaration("padding", cssStyleValue(element, "padding"), 40));
+  styles.push(...safeBoxDeclaration("border-radius", cssStyleValue(element, "border-radius"), 40));
+  return styles.join("; ");
+}
+
+function safeHtmlMarker(kind: string, index: number): string {
+  return `${SAFE_HTML_MARKER_PREFIX}${kind}${String(index + 1).padStart(6, "0")}END`;
+}
+
 function preserveInlineBold(root: ParentNode): void {
   root.querySelectorAll<HTMLElement>("[style]").forEach((element) => {
+    if (element.closest("pre, code")) return;
     if (element.closest("strong, b")) return;
-    const weight = element.style.fontWeight.trim().toLowerCase();
+    const weight = cssStyleValue(element, "font-weight").trim().toLowerCase();
     const numericWeight = /^\d+$/.test(weight) ? Number(weight) : 0;
     if (weight !== "bold" && weight !== "bolder" && numericWeight < 600) return;
     // Keep bold inside the same safe HTML span as a visual underline. Markdown
@@ -179,6 +331,7 @@ function markUnderlines(root: ParentNode): MarkedUnderline[] {
   const candidates = [...root.querySelectorAll<HTMLElement>("u, ins, [style]")]
     .map((element) => ({ element, tags: underlineTags(element) }))
     .filter((candidate): candidate is { element: HTMLElement; tags: { openingTag: string; closingTag: string } } => Boolean(candidate.tags))
+    .filter(({ element }) => !element.closest("pre, code"))
     .filter(({ element }, _index, all) => !all.some((ancestor) => ancestor.element !== element && ancestor.element.contains(element)))
     .filter(({ element }) => Boolean(element.textContent?.trim()))
     .filter(({ element }) => !element.querySelector("address, article, aside, blockquote, div, figure, footer, header, img, li, main, nav, p, pre, section, table"));
@@ -220,7 +373,7 @@ function underlineTags(element: HTMLElement): { openingTag: string; closingTag: 
 }
 
 function safeInlineFontWeight(element: HTMLElement): string | null {
-  const weight = element.style.fontWeight.trim().toLowerCase();
+  const weight = cssStyleValue(element, "font-weight").trim().toLowerCase();
   if (weight === "bold" || weight === "bolder") return "bold";
   if (!/^\d{3}$/.test(weight)) return null;
   const numeric = Number(weight);
@@ -244,6 +397,7 @@ function markTextColors(root: ParentNode): MarkedTextColor[] {
   const candidates = [...root.querySelectorAll<HTMLElement>("[style]")]
     .map((element) => ({ element, color: declaredTextColor(element) }))
     .filter((candidate): candidate is { element: HTMLElement; color: string } => Boolean(candidate.color))
+    .filter(({ element }) => !element.closest("pre, code"))
     .filter(({ element, color }) => !sameCssColor(color, inheritedTextColor(element)))
     .filter(({ element }) => Boolean(element.textContent?.trim()))
     .filter(({ element }) => !element.querySelector("address, article, aside, blockquote, div, figure, footer, header, img, li, main, nav, p, pre, section, table"));
@@ -284,6 +438,7 @@ function markFontSizes(root: ParentNode): MarkedFontSize[] {
   const candidates = [...root.querySelectorAll<HTMLElement>(FONT_SIZE_CANDIDATE_SELECTOR)]
     .map((element) => ({ element, size: effectiveFontSize(element, root) }))
     .filter((candidate): candidate is { element: HTMLElement; size: string } => Boolean(candidate.size))
+    .filter(({ element }) => !element.closest("pre, code"))
     .filter(({ size }) => !sameFontSize(size, "16px"))
     .filter(({ element }) => Boolean(element.textContent?.trim()))
     .filter(({ element }) => isFontSizeLeaf(element))
@@ -337,7 +492,7 @@ function declaredFontSize(element: HTMLElement): string | null {
 
 function safeFontSize(value: string): string | null {
   const size = value.trim().toLowerCase();
-  const match = /^(\d+(?:\.\d+)?)(px|em|rem|%)$/.exec(size);
+  const match = /^((?:\d+(?:\.\d+)?)|(?:\.\d+))(px|em|rem|%)$/.exec(size);
   if (!match) return null;
   const amount = Number(match[1]);
   const unit = match[2];
@@ -533,10 +688,55 @@ function safeBoxDeclaration(property: string, value: string, maxPixels: number):
     : [];
 }
 
+function safeMarginDeclaration(value: string, maxPixels: number): string[] {
+  const parts = value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!parts.length || parts.length > 4) return [];
+  const safeParts = parts.map((part) => part === "auto" ? "auto" : safeCssLength(part, maxPixels));
+  return safeParts.every((part): part is string => Boolean(part))
+    ? [`margin: ${safeParts.join(" ")}`]
+    : [];
+}
+
+function safeFontFamily(value: string): string | null {
+  const family = value.trim();
+  if (!family || family.length > 240 || !/^[\p{L}\p{N}\s"',.-]+$/u.test(family)) return null;
+  const parts = family.split(",").map((part) => part.trim()).filter(Boolean);
+  if (!parts.length || parts.length > 12) return null;
+  return parts.every((part) => /^[-\p{L}\p{N}\s"']+$/u.test(part)) ? parts.join(", ") : null;
+}
+
+function safeLineHeight(value: string): string | null {
+  const lineHeight = value.trim().toLowerCase();
+  if (!lineHeight) return null;
+  if (/^\d+(?:\.\d+)?$/.test(lineHeight)) {
+    const amount = Number(lineHeight);
+    return amount >= 0.8 && amount <= 4 ? String(amount) : null;
+  }
+  return safeCssLength(lineHeight, 120);
+}
+
+function safeBoxShadow(value: string): string | null {
+  const shadow = value.trim().toLowerCase();
+  const match = /^((?:rgba?|hsla?)\([0-9.,%\s-]+\)|#[0-9a-f]{3,8}|[a-z]+)\s+(.+)$/.exec(shadow);
+  if (!match || !safeCssColor(match[1]!)) return null;
+  const parts = match[2]!.split(/\s+/).filter(Boolean);
+  if (parts.length < 2 || parts.length > 5) return null;
+  const lengths = parts.filter((part) => part !== "inset");
+  if (lengths.length < 2 || lengths.length > 4) return null;
+  if (!lengths.every((part) => safeShadowLength(part))) return null;
+  return `${match[1]} ${parts.join(" ")}`;
+}
+
+function safeShadowLength(value: string): boolean {
+  const match = /^(-?(?:(?:\d+(?:\.\d+)?)|(?:\.\d+)))(px|em|rem)?$/.exec(value);
+  if (!match) return false;
+  return Math.abs(Number(match[1])) <= 160;
+}
+
 function safeCssLength(value: string, maxPixels: number): string | null {
   const length = value.trim().toLowerCase();
   if (length === "0" || length === "0px") return "0";
-  const match = /^(\d+(?:\.\d+)?)(px|em|rem|%)$/.exec(length);
+  const match = /^((?:\d+(?:\.\d+)?)|(?:\.\d+))(px|em|rem|%)$/.exec(length);
   if (!match) return null;
   const amount = Number(match[1]);
   const unit = match[2];
@@ -628,6 +828,15 @@ function restoreImageMarkers(markdown: string, images: MarkedImage[]): string {
     const replacement = `\n\n${markdownImage(image.alt, image.url)}\n\n`;
     if (restored.includes(image.marker)) restored = restored.split(image.marker).join(replacement);
     else restored += replacement;
+  }
+  return restored;
+}
+
+function restoreSafeHtmlMarkers(markdown: string, elements: MarkedSafeHtml[]): string {
+  let restored = markdown;
+  for (const element of elements) {
+    const replacement = element.block ? `\n\n${element.html}\n\n` : element.html;
+    restored = restored.split(element.marker).join(replacement);
   }
   return restored;
 }

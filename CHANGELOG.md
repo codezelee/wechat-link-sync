@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.4
+
+- Preserve safe WeChat heading backgrounds, foreground colors, font families, spacing, rounded corners, and shadows so light text remains visible.
+- Restore WeChat code cards with line numbers and syntax colors instead of leaking raw HTML tags or flattening the layout.
+- Preserve styled inline code and keep mixed font, color, background, and size markup valid in Obsidian reading view.
+
 ## 1.7.3
 
 - Modernize the local article URL field with a clearer icon, focus ring, and responsive narrow-sidebar layout.
