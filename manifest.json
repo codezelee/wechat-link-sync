@@ -1,7 +1,7 @@
 {
   "id": "wechat-link-sync",
   "name": "WeChat Link Sync",
-  "version": "1.7.3",
+  "version": "1.7.4",
   "minAppVersion": "1.11.4",
   "description": "Collect article links with the 同步链接 WeChat Mini Program and save them as local Markdown notes.",
   "author": "codezelee",
