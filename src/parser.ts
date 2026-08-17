@@ -4,12 +4,14 @@ import TurndownService from "turndown";
 import type { ParsedArticle } from "./models.js";
 import { extractPublishedAt } from "./published-at.js";
 
-const EXTRACTOR_VERSION = "2.5.0";
+const EXTRACTOR_VERSION = "2.6.0";
 const MINIMUM_CONTENT_LENGTH = 40;
 const IMAGE_MARKER_PREFIX = "ARTICLEINBOXIMAGE";
 const IMAGE_MARKER_SUFFIX = "END";
 const UNDERLINE_MARKER_PREFIX = "ARTICLEINBOXUNDERLINE";
 const COLOR_MARKER_PREFIX = "ARTICLEINBOXCOLOR";
+const CENTER_ALIGNMENT_MARKER_PREFIX = "ARTICLEINBOXCENTER";
+const CENTERABLE_BLOCK_SELECTOR = "center, div, figcaption, h1, h2, h3, h4, h5, h6, p, section";
 const CODE_FONT_PATTERN = /(?:monospace|menlo|monaco|consolas|courier)/i;
 const VISUAL_CODE_LINE_PATTERN = /(?:^|[-_\s])(?:code[-_]?snippet[-_]+(?:outer|line)|code[-_]?line|line[-_]?content|hljs[-_]?ln[-_]?code)(?:[-_\s]|$)/i;
 const CODE_LINE_INDEX_PATTERN = /(?:line[-_ ]?number|code[-_ ]?index|code[-_]?snippet[-_]+line[-_]+index)/i;
@@ -38,6 +40,7 @@ export function parseArticle(html: string, sourceUrl: string): ParsedArticle {
   if (isWechat) preserveWechatSemantics(extractionRoot);
   const markedUnderlines = isWechat ? markUnderlines(extractionRoot) : [];
   const markedColors = isWechat ? markTextColors(extractionRoot) : [];
+  const markedCenterAlignments = isWechat ? markCenterAlignments(extractionRoot) : [];
   const markedImages = markImages(extractionRoot);
   const result = new Defuddle(document, {
     url: sourceUrl,
@@ -55,12 +58,15 @@ export function parseArticle(html: string, sourceUrl: string): ParsedArticle {
   }).parse();
 
   const title = cleanTitle((isWechat ? pageTitle : result.title) || pageTitle, sourceUrl);
-  const restored = restoreTextColorMarkers(
-    restoreUnderlineMarkers(
-      restoreImageMarkers(markdownFromResult(result.contentMarkdown, result.content), markedImages),
-      markedUnderlines
+  const restored = restoreCenterAlignmentMarkers(
+    restoreTextColorMarkers(
+      restoreUnderlineMarkers(
+        restoreImageMarkers(markdownFromResult(result.contentMarkdown, result.content), markedImages),
+        markedUnderlines
+      ),
+      markedColors
     ),
-    markedColors
+    markedCenterAlignments
   );
   const markdown = applyHeadingColors(normalizeMarkdown(restored, title), headingColors);
   if (visibleLength(markdown) < MINIMUM_CONTENT_LENGTH) {
@@ -96,6 +102,11 @@ interface MarkedTextColor {
   startMarker: string;
   endMarker: string;
   color: string;
+}
+
+interface MarkedCenterAlignment {
+  startMarker: string;
+  endMarker: string;
 }
 
 interface HeadingColor {
@@ -246,6 +257,44 @@ function comparableCssColor(value: string): string {
   return `rgb(${Number.parseInt(expanded.slice(0, 2), 16)},${Number.parseInt(expanded.slice(2, 4), 16)},${Number.parseInt(expanded.slice(4, 6), 16)})`;
 }
 
+function markCenterAlignments(root: ParentNode): MarkedCenterAlignment[] {
+  const candidates = [...root.querySelectorAll<HTMLElement>(CENTERABLE_BLOCK_SELECTOR)]
+    .filter((element) => Boolean(element.textContent?.trim()))
+    .filter((element) => effectiveTextAlignment(element, root) === "center")
+    .filter((element) => !element.querySelector(CENTERABLE_BLOCK_SELECTOR))
+    .filter((element) => !element.querySelector("img, pre, table, ul, ol"));
+
+  return candidates.map((element, index) => {
+    const markerId = String(index + 1).padStart(6, "0");
+    const startMarker = `${CENTER_ALIGNMENT_MARKER_PREFIX}${markerId}START`;
+    const endMarker = `${CENTER_ALIGNMENT_MARKER_PREFIX}${markerId}END`;
+    // Alignment markers are added after inline color and underline markers so
+    // the restored block-style span remains the valid outer wrapper.
+    element.prepend(element.ownerDocument.createTextNode(startMarker));
+    element.append(element.ownerDocument.createTextNode(endMarker));
+    return { startMarker, endMarker };
+  });
+}
+
+function effectiveTextAlignment(element: HTMLElement, root: ParentNode): string | null {
+  let current: HTMLElement | null = element;
+  while (current) {
+    const declared = declaredTextAlignment(current);
+    if (declared) return declared;
+    if (current === root) break;
+    current = current.parentElement;
+  }
+  return null;
+}
+
+function declaredTextAlignment(element: HTMLElement): string | null {
+  const inline = element.style.textAlign.trim().toLowerCase();
+  if (inline) return inline;
+  const legacy = element.getAttribute("align")?.trim().toLowerCase();
+  if (legacy) return legacy;
+  return element.tagName === "CENTER" ? "center" : null;
+}
+
 function preserveVisualCodeLines(root: ParentNode): void {
   const candidates = [...root.querySelectorAll<HTMLElement>("pre, [style], [class]")]
     .filter((element) => isCodeLike(element))
@@ -347,6 +396,16 @@ function restoreTextColorMarkers(markdown: string, colors: MarkedTextColor[]): s
     restored = restored
       .split(color.startMarker).join(`<span style="color: ${color.color}">`)
       .split(color.endMarker).join("</span>");
+  }
+  return restored;
+}
+
+function restoreCenterAlignmentMarkers(markdown: string, alignments: MarkedCenterAlignment[]): string {
+  let restored = markdown;
+  for (const alignment of alignments) {
+    restored = restored
+      .split(alignment.startMarker).join('<span style="display: block; text-align: center">')
+      .split(alignment.endMarker).join("</span>");
   }
   return restored;
 }
