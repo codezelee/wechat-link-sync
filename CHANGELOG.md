@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.2
+
+- Preserve centered WeChat text blocks declared through `text-align: center`, legacy `align="center"`, or `<center>` markup.
+- Retain inherited centering without overriding explicitly left-aligned or justified child paragraphs.
+- Keep centered text compatible with existing bold, underline, and color preservation.
+
 ## 1.7.1
 
 - Preserve visual underlines represented by CSS text decoration or bottom borders when converting WeChat articles to Markdown.
