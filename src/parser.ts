@@ -4,14 +4,19 @@ import TurndownService from "turndown";
 import type { ParsedArticle } from "./models.js";
 import { extractPublishedAt } from "./published-at.js";
 
-const EXTRACTOR_VERSION = "2.6.0";
+const EXTRACTOR_VERSION = "2.8.0";
 const MINIMUM_CONTENT_LENGTH = 40;
 const IMAGE_MARKER_PREFIX = "ARTICLEINBOXIMAGE";
 const IMAGE_MARKER_SUFFIX = "END";
 const UNDERLINE_MARKER_PREFIX = "ARTICLEINBOXUNDERLINE";
 const COLOR_MARKER_PREFIX = "ARTICLEINBOXCOLOR";
+const FONT_SIZE_MARKER_PREFIX = "ARTICLEINBOXFONTSIZE";
 const CENTER_ALIGNMENT_MARKER_PREFIX = "ARTICLEINBOXCENTER";
+const BLOCK_STYLE_MARKER_PREFIX = "ARTICLEINBOXBLOCKSTYLE";
+const BLOCK_HTML_MARKER_PREFIX = "ARTICLEINBOXBLOCKHTML";
 const CENTERABLE_BLOCK_SELECTOR = "center, div, figcaption, h1, h2, h3, h4, h5, h6, p, section";
+const STYLEABLE_BLOCK_SELECTOR = "address, article, aside, blockquote, div, figcaption, figure, footer, header, li, main, nav, p, section";
+const FONT_SIZE_CANDIDATE_SELECTOR = "a, b, code, del, div, em, figcaption, h1, h2, h3, h4, h5, h6, i, ins, kbd, mark, p, s, section, small, span, strong, sub, sup, u";
 const CODE_FONT_PATTERN = /(?:monospace|menlo|monaco|consolas|courier)/i;
 const VISUAL_CODE_LINE_PATTERN = /(?:^|[-_\s])(?:code[-_]?snippet[-_]+(?:outer|line)|code[-_]?line|line[-_]?content|hljs[-_]?ln[-_]?code)(?:[-_\s]|$)/i;
 const CODE_LINE_INDEX_PATTERN = /(?:line[-_ ]?number|code[-_ ]?index|code[-_]?snippet[-_]+line[-_]+index)/i;
@@ -40,7 +45,10 @@ export function parseArticle(html: string, sourceUrl: string): ParsedArticle {
   if (isWechat) preserveWechatSemantics(extractionRoot);
   const markedUnderlines = isWechat ? markUnderlines(extractionRoot) : [];
   const markedColors = isWechat ? markTextColors(extractionRoot) : [];
+  const markedFontSizes = isWechat ? markFontSizes(extractionRoot) : [];
   const markedCenterAlignments = isWechat ? markCenterAlignments(extractionRoot) : [];
+  const markedBlockHtml = isWechat ? markBlockHtmlElements(extractionRoot) : [];
+  const markedBlockStyles = isWechat ? markBlockStyles(extractionRoot) : [];
   const markedImages = markImages(extractionRoot);
   const result = new Defuddle(document, {
     url: sourceUrl,
@@ -58,15 +66,24 @@ export function parseArticle(html: string, sourceUrl: string): ParsedArticle {
   }).parse();
 
   const title = cleanTitle((isWechat ? pageTitle : result.title) || pageTitle, sourceUrl);
-  const restored = restoreCenterAlignmentMarkers(
-    restoreTextColorMarkers(
-      restoreUnderlineMarkers(
-        restoreImageMarkers(markdownFromResult(result.contentMarkdown, result.content), markedImages),
-        markedUnderlines
+  const restored = restoreBlockStyleMarkers(
+    restoreBlockHtmlMarkers(
+      restoreCenterAlignmentMarkers(
+        restoreFontSizeMarkers(
+          restoreTextColorMarkers(
+            restoreUnderlineMarkers(
+              restoreImageMarkers(markdownFromResult(result.contentMarkdown, result.content), markedImages),
+              markedUnderlines
+            ),
+            markedColors
+          ),
+          markedFontSizes
+        ),
+        markedCenterAlignments
       ),
-      markedColors
+      markedBlockHtml
     ),
-    markedCenterAlignments
+    markedBlockStyles
   );
   const markdown = applyHeadingColors(normalizeMarkdown(restored, title), headingColors);
   if (visibleLength(markdown) < MINIMUM_CONTENT_LENGTH) {
@@ -104,9 +121,28 @@ interface MarkedTextColor {
   color: string;
 }
 
+interface MarkedFontSize {
+  startMarker: string;
+  endMarker: string;
+  size: string;
+}
+
 interface MarkedCenterAlignment {
   startMarker: string;
   endMarker: string;
+}
+
+interface MarkedBlockStyle {
+  startMarker: string;
+  endMarker: string;
+  style: string;
+}
+
+interface MarkedBlockHtml {
+  startMarker: string;
+  endMarker: string;
+  openingTag: string;
+  closingTag: string;
 }
 
 interface HeadingColor {
@@ -244,6 +280,78 @@ function declaredTextColor(element: HTMLElement): string | null {
   return null;
 }
 
+function markFontSizes(root: ParentNode): MarkedFontSize[] {
+  const candidates = [...root.querySelectorAll<HTMLElement>(FONT_SIZE_CANDIDATE_SELECTOR)]
+    .map((element) => ({ element, size: effectiveFontSize(element, root) }))
+    .filter((candidate): candidate is { element: HTMLElement; size: string } => Boolean(candidate.size))
+    .filter(({ size }) => !sameFontSize(size, "16px"))
+    .filter(({ element }) => Boolean(element.textContent?.trim()))
+    .filter(({ element }) => isFontSizeLeaf(element))
+    .filter(({ element, size }) => {
+      if (!isInlineElement(element)) return true;
+      const declared = declaredFontSize(element);
+      return Boolean(declared && !sameFontSize(declared, inheritedFontSize(element, root) ?? "16px") && sameFontSize(declared, size));
+    });
+
+  return candidates.map(({ element, size }, index) => {
+    const markerId = String(index + 1).padStart(6, "0");
+    const startMarker = `${FONT_SIZE_MARKER_PREFIX}${markerId}START`;
+    const endMarker = `${FONT_SIZE_MARKER_PREFIX}${markerId}END`;
+    element.prepend(element.ownerDocument.createTextNode(startMarker));
+    element.append(element.ownerDocument.createTextNode(endMarker));
+    return { startMarker, endMarker, size };
+  });
+}
+
+function isFontSizeLeaf(element: HTMLElement): boolean {
+  if (isInlineElement(element)) return true;
+  return !element.querySelector(CENTERABLE_BLOCK_SELECTOR)
+    && !element.querySelector("img, ol, pre, table, ul");
+}
+
+function effectiveFontSize(element: HTMLElement, root: ParentNode): string | null {
+  let current: HTMLElement | null = element;
+  while (current) {
+    const size = declaredFontSize(current);
+    if (size) return size;
+    if (current === root) break;
+    current = current.parentElement;
+  }
+  return null;
+}
+
+function inheritedFontSize(element: HTMLElement, root: ParentNode): string | null {
+  let parent = element.parentElement;
+  while (parent) {
+    const size = declaredFontSize(parent);
+    if (size) return size;
+    if (parent === root) break;
+    parent = parent.parentElement;
+  }
+  return null;
+}
+
+function declaredFontSize(element: HTMLElement): string | null {
+  return safeFontSize(cssStyleValue(element, "font-size"));
+}
+
+function safeFontSize(value: string): string | null {
+  const size = value.trim().toLowerCase();
+  const match = /^(\d+(?:\.\d+)?)(px|em|rem|%)$/.exec(size);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  const unit = match[2];
+  if (!Number.isFinite(amount)) return null;
+  if (unit === "px" && amount >= 8 && amount <= 72) return `${amount}px`;
+  if ((unit === "em" || unit === "rem") && amount >= 0.5 && amount <= 4) return `${amount}${unit}`;
+  if (unit === "%" && amount >= 50 && amount <= 400) return `${amount}%`;
+  return null;
+}
+
+function sameFontSize(left: string, right: string): boolean {
+  return left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
 function sameCssColor(left: string | null, right: string | null): boolean {
   if (!left || !right) return left === right;
   return comparableCssColor(left) === comparableCssColor(right);
@@ -288,11 +396,155 @@ function effectiveTextAlignment(element: HTMLElement, root: ParentNode): string 
 }
 
 function declaredTextAlignment(element: HTMLElement): string | null {
-  const inline = element.style.textAlign.trim().toLowerCase();
+  const inline = cssStyleValue(element, "text-align").toLowerCase();
   if (inline) return inline;
   const legacy = element.getAttribute("align")?.trim().toLowerCase();
   if (legacy) return legacy;
   return element.tagName === "CENTER" ? "center" : null;
+}
+
+function markBlockHtmlElements(root: ParentNode): MarkedBlockHtml[] {
+  const elements = [...root.querySelectorAll<HTMLElement>("p, h1, h2, h3, h4, h5, h6, strong, b, em, i, del, s, code")]
+    .filter((element) => isInsideStyledBlock(element, root))
+    .sort((left, right) => elementDepth(right) - elementDepth(left));
+
+  return elements.map((element, index) => {
+    const markerId = String(index + 1).padStart(6, "0");
+    const startMarker = `${BLOCK_HTML_MARKER_PREFIX}${markerId}START`;
+    const endMarker = `${BLOCK_HTML_MARKER_PREFIX}${markerId}END`;
+    const tag = safeBlockHtmlTag(element.tagName);
+    const parent = element.parentNode;
+    if (!parent) return { startMarker, endMarker, openingTag: "", closingTag: "" };
+    parent.insertBefore(element.ownerDocument.createTextNode(startMarker), element);
+    while (element.firstChild) parent.insertBefore(element.firstChild, element);
+    parent.insertBefore(element.ownerDocument.createTextNode(endMarker), element);
+    element.remove();
+    return { startMarker, endMarker, openingTag: `<${tag}>`, closingTag: `</${tag}>` };
+  });
+}
+
+function isInsideStyledBlock(element: HTMLElement, root: ParentNode): boolean {
+  let parent = element.parentElement;
+  while (parent) {
+    if (safeBlockStyle(parent)) return true;
+    if (parent === root) break;
+    parent = parent.parentElement;
+  }
+  return false;
+}
+
+function elementDepth(element: Element): number {
+  let depth = 0;
+  let parent = element.parentElement;
+  while (parent) {
+    depth += 1;
+    parent = parent.parentElement;
+  }
+  return depth;
+}
+
+function safeBlockHtmlTag(tagName: string): string {
+  const tag = tagName.toLowerCase();
+  if (/^h[1-6]$/.test(tag)) return tag;
+  if (tag === "strong" || tag === "b") return "strong";
+  if (tag === "em" || tag === "i") return "em";
+  if (tag === "del" || tag === "s") return "del";
+  return tag === "code" ? "code" : "p";
+}
+
+function markBlockStyles(root: ParentNode): MarkedBlockStyle[] {
+  const candidates = [...root.querySelectorAll<HTMLElement>(STYLEABLE_BLOCK_SELECTOR)]
+    .map((element) => ({ element, style: safeBlockStyle(element) }))
+    .filter((candidate): candidate is { element: HTMLElement; style: string } => Boolean(candidate.style))
+    .filter(({ element }) => Boolean(element.textContent?.trim()));
+
+  return candidates.map(({ element, style }, index) => {
+    const markerId = String(index + 1).padStart(6, "0");
+    const startMarker = `${BLOCK_STYLE_MARKER_PREFIX}${markerId}START`;
+    const endMarker = `${BLOCK_STYLE_MARKER_PREFIX}${markerId}END`;
+    element.prepend(element.ownerDocument.createTextNode(startMarker));
+    element.append(element.ownerDocument.createTextNode(endMarker));
+    return { startMarker, endMarker, style };
+  });
+}
+
+function safeBlockStyle(element: HTMLElement): string | null {
+  const declaredBackground = declaredBackgroundColor(element);
+  const inheritedBackground = inheritedBackgroundColor(element) ?? "rgb(255, 255, 255)";
+  const backgroundColor = declaredBackground && !sameCssColor(declaredBackground, inheritedBackground)
+    ? declaredBackground
+    : null;
+  const borderLeft = safeLeftBorder(element);
+  if (!backgroundColor && !borderLeft) return null;
+
+  const styles = [
+    ...(backgroundColor ? [`background-color: ${backgroundColor}`] : []),
+    ...(borderLeft ? [`border-left: ${borderLeft}`] : []),
+    ...safeBoxDeclaration("padding", cssStyleValue(element, "padding"), 160),
+    ...safeBoxDeclaration("border-radius", cssStyleValue(element, "border-radius"), 80),
+    ...safeBoxDeclaration("margin", cssStyleValue(element, "margin"), 160)
+  ];
+  return styles.join("; ");
+}
+
+function declaredBackgroundColor(element: HTMLElement): string | null {
+  return safeCssColor(cssStyleValue(element, "background-color"))
+    ?? safeCssColor(cssStyleValue(element, "background"));
+}
+
+function inheritedBackgroundColor(element: HTMLElement): string | null {
+  let parent = element.parentElement;
+  while (parent) {
+    const color = declaredBackgroundColor(parent);
+    if (color) return color;
+    parent = parent.parentElement;
+  }
+  return null;
+}
+
+function safeLeftBorder(element: HTMLElement): string | null {
+  const shorthand = cssStyleValue(element, "border-left");
+  const shorthandMatch = /^(\S+)\s+(solid|dashed|dotted|double)\s+(.+)$/i.exec(shorthand);
+  const width = safeCssLength(cssStyleValue(element, "border-left-width") || shorthandMatch?.[1] || "", 12);
+  const style = (cssStyleValue(element, "border-left-style") || shorthandMatch?.[2] || "").trim().toLowerCase();
+  const color = safeCssColor(cssStyleValue(element, "border-left-color") || shorthandMatch?.[3] || "");
+  if (!width || width === "0" || !/^(?:solid|dashed|dotted|double)$/.test(style) || !color) return null;
+  return `${width} ${style} ${color}`;
+}
+
+function cssStyleValue(element: HTMLElement, property: string): string {
+  const parsed = element.style.getPropertyValue(property).trim();
+  if (parsed) return parsed;
+  const declarations = element.getAttribute("style")?.split(";") ?? [];
+  for (const declaration of declarations) {
+    const separator = declaration.indexOf(":");
+    if (separator < 0 || declaration.slice(0, separator).trim().toLowerCase() !== property) continue;
+    return declaration.slice(separator + 1).trim();
+  }
+  return "";
+}
+
+function safeBoxDeclaration(property: string, value: string, maxPixels: number): string[] {
+  const parts = value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!parts.length || parts.length > 4) return [];
+  const safeParts = parts.map((part) => safeCssLength(part, maxPixels));
+  return safeParts.every((part): part is string => Boolean(part))
+    ? [`${property}: ${safeParts.join(" ")}`]
+    : [];
+}
+
+function safeCssLength(value: string, maxPixels: number): string | null {
+  const length = value.trim().toLowerCase();
+  if (length === "0" || length === "0px") return "0";
+  const match = /^(\d+(?:\.\d+)?)(px|em|rem|%)$/.exec(length);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  const unit = match[2];
+  if (!Number.isFinite(amount)) return null;
+  if (unit === "px" && amount <= maxPixels) return `${amount}px`;
+  if ((unit === "em" || unit === "rem") && amount <= 10) return `${amount}${unit}`;
+  if (unit === "%" && amount <= 50) return `${amount}%`;
+  return null;
 }
 
 function preserveVisualCodeLines(root: ParentNode): void {
@@ -400,12 +652,42 @@ function restoreTextColorMarkers(markdown: string, colors: MarkedTextColor[]): s
   return restored;
 }
 
+function restoreFontSizeMarkers(markdown: string, sizes: MarkedFontSize[]): string {
+  let restored = markdown;
+  for (const size of sizes) {
+    restored = restored
+      .split(size.startMarker).join(`<span style="font-size: ${size.size}">`)
+      .split(size.endMarker).join("</span>");
+  }
+  return restored;
+}
+
 function restoreCenterAlignmentMarkers(markdown: string, alignments: MarkedCenterAlignment[]): string {
   let restored = markdown;
   for (const alignment of alignments) {
     restored = restored
       .split(alignment.startMarker).join('<span style="display: block; text-align: center">')
       .split(alignment.endMarker).join("</span>");
+  }
+  return restored;
+}
+
+function restoreBlockStyleMarkers(markdown: string, blocks: MarkedBlockStyle[]): string {
+  let restored = markdown;
+  for (const block of blocks) {
+    restored = restored
+      .split(block.startMarker).join(`<div style="${block.style}">`)
+      .split(block.endMarker).join("</div>");
+  }
+  return restored;
+}
+
+function restoreBlockHtmlMarkers(markdown: string, elements: MarkedBlockHtml[]): string {
+  let restored = markdown;
+  for (const element of elements) {
+    restored = restored
+      .split(element.startMarker).join(element.openingTag)
+      .split(element.endMarker).join(element.closingTag);
   }
   return restored;
 }

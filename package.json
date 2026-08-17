@@ -1,6 +1,6 @@
 {
   "name": "obsidian-wechat-link-sync",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "description": "Obsidian client for the 同步链接 WeChat Mini Program.",
   "main": "main.js",
   "type": "module",

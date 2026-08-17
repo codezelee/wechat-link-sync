@@ -66,11 +66,14 @@ export class InboxView extends ItemView {
     localText.createEl("strong", { text: "本地处理链接" });
     localText.createSpan({ text: "直接解析并写入当前 Vault，不会创建或上传服务器记录" });
     const localControls = localCard.createDiv({ cls: "article-inbox-local-controls" });
-    const localInput = localControls.createEl("input", {
+    const localField = localControls.createDiv({ cls: "article-inbox-url-field" });
+    const localFieldIcon = localField.createSpan({ cls: "article-inbox-url-field-icon" });
+    setIcon(localFieldIcon, "link-2");
+    const localInput = localField.createEl("input", {
       type: "url",
       placeholder: "粘贴文章链接",
       value: this.localUrl,
-      attr: { "aria-label": "本地处理的文章链接" }
+      attr: { "aria-label": "本地处理的文章链接", autocomplete: "off", spellcheck: "false" }
     });
     const processLocal = async (): Promise<void> => {
       if (await this.plugin.processLocalUrl(this.localUrl)) {

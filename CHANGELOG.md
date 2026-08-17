@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.7.3
+
+- Modernize the local article URL field with a clearer icon, focus ring, and responsive narrow-sidebar layout.
+- Preserve safe WeChat text-block backgrounds, left borders, padding, margins, and rounded corners in Markdown.
+- Preserve visually distinct WeChat font sizes for section numbers, headings, emphasized lines, and inherited text.
+- Keep background, font-size, alignment, bold, underline, and text-color markup safely composable in Obsidian reading view.
+
 ## 1.7.2
 
 - Preserve centered WeChat text blocks declared through `text-align: center`, legacy `align="center"`, or `<center>` markup.
