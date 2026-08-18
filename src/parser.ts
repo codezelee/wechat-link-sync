@@ -200,12 +200,12 @@ function markRichCodeBlocks(root: ParentNode): MarkedSafeHtml[] {
 }
 
 function directCodeLines(pre: HTMLElement): HTMLElement[] {
-  return [...pre.children].filter((child): child is HTMLElement => child instanceof HTMLElement && child.tagName === "CODE");
+  return [...pre.children].filter((child): child is HTMLElement => isHtmlElementNode(child) && child.tagName === "CODE");
 }
 
 function serializeCodeNode(node: Node): string {
   if (node.nodeType === node.TEXT_NODE) return escapeHtml((node.textContent ?? "").replace(/\u00a0/g, " "));
-  if (!(node instanceof Element)) return "";
+  if (!isElementNode(node)) return "";
   if (node.tagName === "BR") return "\n";
   const element = node as HTMLElement;
   const className = typeof element.className === "string" ? element.className : "";
@@ -781,7 +781,7 @@ function visualTextContent(root: HTMLElement): string {
       if (!/^\s+$/.test(value) || !value.includes("\n")) output.push(value);
       return;
     }
-    if (!(node instanceof Element)) return;
+    if (!isElementNode(node)) return;
     if (node.tagName === "BR") {
       appendNewline();
       return;
@@ -809,6 +809,22 @@ function visualTextContent(root: HTMLElement): string {
     .replace(/^\s*\n|\n\s*$/g, "")
     .replace(/\n{3,}/g, "\n\n");
 }
+
+function isElementNode(node: Node): node is Element {
+  const obsidianNode = node as Node & { instanceOf?: NodeInstanceOf };
+  return typeof obsidianNode.instanceOf === "function"
+    ? obsidianNode.instanceOf(Element)
+    : node.nodeType === 1;
+}
+
+function isHtmlElementNode(node: Node): node is HTMLElement {
+  const obsidianNode = node as Node & { instanceOf?: NodeInstanceOf };
+  return typeof obsidianNode.instanceOf === "function"
+    ? obsidianNode.instanceOf(HTMLElement)
+    : isElementNode(node) && node.namespaceURI === "http://www.w3.org/1999/xhtml";
+}
+
+type NodeInstanceOf = <T>(type: { new(): T }) => boolean;
 
 function markImages(root: ParentNode): MarkedImage[] {
   const images: MarkedImage[] = [];

@@ -61,7 +61,7 @@ export class VaultWriter {
         if (existingImage) throw new Error(`图片路径已被目录占用：${image.vaultPath}`);
         const created = await this.app.vault.createBinary(expectedPath, image.data);
         if (normalizePath(created.path) !== expectedPath) {
-          try { await this.app.vault.delete(created, true); }
+          try { await this.app.fileManager.trashFile(created); }
           catch { /* Keep the path invariant error as the primary failure. */ }
           throw new Error(`图片实际写入路径异常：${created.path}`);
         }
@@ -71,7 +71,7 @@ export class VaultWriter {
       return { path: resolved.path, warnings: prepared.warnings, duplicate: false };
     } catch (error) {
       for (const image of createdImages.reverse()) {
-        try { await this.app.vault.delete(image, true); }
+        try { await this.app.fileManager.trashFile(image); }
         catch { /* Preserve the original write error; orphaned files are safe to keep. */ }
       }
       throw new Error(`VAULT_WRITE_FAILED: ${messageOf(error)}`);
@@ -113,7 +113,7 @@ export class VaultWriter {
         if (existingImage) throw new Error(`图片路径已被目录占用：${image.vaultPath}`);
         const created = await this.app.vault.createBinary(expectedPath, image.data);
         if (normalizePath(created.path) !== expectedPath) {
-          try { await this.app.vault.delete(created, true); }
+          try { await this.app.fileManager.trashFile(created); }
           catch { /* Preserve the path invariant error. */ }
           throw new Error(`图片实际写入路径异常：${created.path}`);
         }
@@ -132,7 +132,7 @@ export class VaultWriter {
         catch { /* Preserve the primary rewrite error. */ }
       }
       for (const image of createdImages.reverse()) {
-        try { await this.app.vault.delete(image, true); }
+        try { await this.app.fileManager.trashFile(image); }
         catch { /* Preserve the primary rewrite error. */ }
       }
       throw new Error(`VAULT_WRITE_FAILED: ${messageOf(error)}`);
@@ -194,7 +194,7 @@ export class VaultWriter {
     for (const path of LEGACY_PLUGIN_ROOTS) {
       const item = this.app.vault.getAbstractFileByPath(path);
       if (item instanceof TFolder && item.children.length === 0) {
-        await this.app.vault.delete(item, true);
+        await this.app.fileManager.trashFile(item);
         removed += 1;
       }
     }

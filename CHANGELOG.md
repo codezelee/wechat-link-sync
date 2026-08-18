@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.7.5
+
+- Move failed-write rollback files and empty legacy folders to the configured trash instead of deleting them permanently.
+- Use cross-window-safe DOM element checks while parsing articles opened in detached documents or secondary windows.
+
 ## 1.7.4
 
 - Preserve safe WeChat heading backgrounds, foreground colors, font families, spacing, rounded corners, and shadows so light text remains visible.
