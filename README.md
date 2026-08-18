@@ -48,7 +48,7 @@ WeChat Link Sync is an Obsidian desktop plugin that receives article links from 
 在微信中打开小程序 **“同步链接”**，进入“设备”，点击“绑定新设备”生成一次性绑定码。然后进入 Obsidian 的“WeChat Link Sync → 选项”，输入该绑定码完成绑定。绑定码仅可使用一次，有效期 10 分钟。
 
 <p align="center">
-  <img src="docs/screenshots/mini-program-devices.webp" width="360" alt="同步链接小程序设备绑定页面">
+  <img src="./docs/screenshots/mini-program-devices.png" width="360" alt="同步链接小程序设备绑定页面">
 </p>
 
 #### 3. 投递文章链接
@@ -56,7 +56,7 @@ WeChat Link Sync is an Obsidian desktop plugin that receives article links from 
 在手机浏览器或微信中复制文章链接，粘贴到小程序“收集”页；按需填写备注和标签，然后点击“放入收集箱”。
 
 <p align="center">
-  <img src="docs/screenshots/mini-program-collect.webp" width="360" alt="同步链接小程序收集文章页面">
+  <img src="./docs/screenshots/mini-program-collect.png" width="360" alt="同步链接小程序收集文章页面">
 </p>
 
 #### 4. 查看投递状态
@@ -64,9 +64,9 @@ WeChat Link Sync is an Obsidian desktop plugin that receives article links from 
 “记录”页展示文章当前状态。打开记录详情可以查看来源链接、备注、标签、处理设备和处理时间，也可以重新投递。
 
 <p align="center">
-  <img src="docs/screenshots/mini-program-records.webp" width="340" alt="同步链接小程序采集记录页面">
+  <img src="./docs/screenshots/mini-program-records.png" width="340" alt="同步链接小程序采集记录页面">
   &nbsp;
-  <img src="docs/screenshots/mini-program-record-detail.webp" width="340" alt="同步链接小程序记录详情页面">
+  <img src="./docs/screenshots/mini-program-record-detail.png" width="340" alt="同步链接小程序记录详情页面">
 </p>
 
 #### 5. 在 Obsidian 中处理文章
@@ -74,14 +74,14 @@ WeChat Link Sync is an Obsidian desktop plugin that receives article links from 
 打开左侧功能区的收件箱图标。在未处理记录上点击“处理”，或点击“全部处理”。插件会在桌面端获取网页、转换为 Markdown，并下载可用图片。
 
 <p align="center">
-  <img src="docs/screenshots/obsidian-inbox.webp" width="420" alt="WeChat Link Sync Obsidian 侧边栏">
+  <img src="./docs/screenshots/obsidian-inbox.png" width="420" alt="WeChat Link Sync Obsidian 侧边栏">
 </p>
 
 #### 6. 获得本地 Markdown 笔记
 
 处理成功后，文章会写入设置的 Vault 目录；图片统一保存在该目录下的 `ImageSource` 文件夹中。笔记包含来源链接、作者、采集时间等属性。
 
-![WeChat Link Sync 保存到 Obsidian 的文章笔记](docs/screenshots/obsidian-note.webp)
+![WeChat Link Sync 保存到 Obsidian 的文章笔记](./docs/screenshots/obsidian-note.png)
 
 ### 网络与隐私
 
