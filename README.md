@@ -86,7 +86,7 @@ WeChat Link Sync is an Obsidian desktop plugin that receives article links from 
 ### 网络与隐私
 
 - 小程序投递的原始链接、备注、标签和处理状态会通过 WeChat Link Sync 服务在已绑定设备间同步。
-- 插件会连接 `https://api.bigpro.cn` 完成设备绑定、获取链接队列和回传处理状态。
+- 插件会连接 WeChat Link Sync 服务完成设备绑定、获取链接队列和回传处理状态。
 - 文章正文由 Obsidian 桌面插件从来源网站获取、解析并写入本地 Vault；插件不会把提取后的文章正文上传到 WeChat Link Sync 服务。
 - 插件使用 Obsidian `SecretStorage` 保存设备令牌；普通插件设置中不会写入明文令牌，设置页也只显示星号。解除绑定后，服务器会立即使该令牌失效。诊断导出不会包含令牌、正文或 Vault 内容。
 - “本地处理链接”功能直接访问来源网页并写入当前 Vault，不创建服务器投递记录。
